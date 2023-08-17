@@ -6,7 +6,7 @@ gr=grains('FORCECHAIN',step,'',app); %get grains
 fnm=fullfile(MakePath(app,'SCF'),char("LoopsSpaceCellsfile"+step+".mat"));
 sc=load(fnm).sc; %load Clusters
 
-if isnumeric(clOrder)
+if nargin==3
     clID=find(cat(1,sc.Loops.Order)==clOrder,1);
     if isempty(clID)
        fprintf('No cluster of the asked order\n') 
@@ -16,10 +16,8 @@ else
 end
 %clVRplot(sc,clID,gr)
 
-clFCplot(app,sc,clID,gr)
+clFCplot(app,sc,clID,gr,step)
 end
-
-
 function clVRplot(sc,clID,gr) %#ok<*DEFNU>
 gC = goodCell(sc);
 if isempty(sc.Loops(1).Volume)
@@ -73,10 +71,8 @@ for i=1:numel(cel)
     trisurf(cbd,g(:,1),g(:,2),g(:,3),'Facecolor','red','FaceAlpha',0.1)
 end
 
-
 end
-
-function clFCplot(app,sc,clID,gr)
+function clFCplot(app,sc,clID,gr,step)
 clGr=sc.Loops(clID).Grains;
 fc=gr.ForceChains;
 
@@ -87,7 +83,7 @@ for i=1:numel(gr.ForceChains)
     if sum(chk)>0;fcIds(i)=1;end
 end
 fcIds=find(fcIds);
-path=fullfile(MakePath(app),"Cluster"+clID);
+path=fullfile(MakePath(app),"Cluster"+clID+"-Step"+step);
 if exist(path,'dir')==0;mkdir(path);end
 %draw fc lines
 vtkwrite(fullfile(path,"FcLines-All.vtk"),'polydata',...

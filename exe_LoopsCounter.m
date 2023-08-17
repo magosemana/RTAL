@@ -21,32 +21,13 @@ end
 D= app.Bool3D+2;
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray);
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
 
 %prepare SpaceCellFiles directory
 pathSc=MakePath(app,'SCF');
 
 %start variables
-aniOF=0;defOF=0;vrOF=0;strOF=0;trOF=0;stnOF=0;doVol=1;
+aniOF=0;defOF=0;vrOF=0;strOF=0;trOF=0;stnOF=0;aveOF=0;doVol=1;
 %Check VTK
 if isequal(upper(vtkOF),'ON')
     vtkOF=1;
@@ -67,8 +48,8 @@ end
 if D==2
     baseRes=zeros(nbFiles,7); %steps (1) Loops(4) MeanVal(2)
 else
-    maxL=10000;
-    baseRes=zeros(maxL/2,nbFiles,4); %on 3rd dim : order/size/cells
+    maxCl=10000;
+    baseRes=zeros(maxCl/2,nbFiles,4); %on 3rd dim : order/size/cells
     %prepare anisotropy
     if isequal(app.LPAniSwitch.Value,'On')
         aniOF=1;
@@ -77,12 +58,13 @@ else
     %prepare Deformability
     if isequal(app.LPDefSwitch.Value,'On')
         defOF=1;
-        defRes=cell(nbFiles,1);
+        defRes=cell(nbFiles,2);
     end
     %prepare VoidRatio
     if isequal(app.LPVRSwitch.Value,'On')
         vrOF=1;
-        vrData=zeros(maxL,nbFiles,2);
+        vrData=zeros(maxCl,nbFiles,2);
+        vrTot=zeros(nbFiles,1);
         resVRZ=cell(nbFiles,2);
     end
     %prepare Stress
@@ -98,6 +80,12 @@ else
     %Prepare Strain
     if isequal(app.LPStnSwitch.Value,'On')
         stnOF=1;
+    end
+    %prepare Average cluster order
+    if isequal(app.LPACSwitch.Value,'On')
+        aveOF=1;
+        aveCl=zeros(app.NbGrains,nbFiles);
+        pathAve=MakePath(app,'LOOPAC');
     end
 end
 
@@ -153,6 +141,7 @@ for i=1:nbFiles
     %get size in a vector
     lOd=cat(1,sc.Loops.Order);   %loops order
     if D==2
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 2D %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %Save step
         baseRes(i,1,1)=step;
         %count number of loops of same sizes, starting at loop 3 in 2D
@@ -187,8 +176,9 @@ for i=1:nbFiles
                     zeros(size(cord,1),1),cord(:,2),cord(:,3),drawLoops);
             end
         end
-    else %%%%D=3
-
+    else 
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 3D %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %%%%%% STRAIN %%%%%%
         %Strain - first calculation because it add Volume properties to
         %Clusters that can be used later
         if stnOF
@@ -213,7 +203,7 @@ for i=1:nbFiles
                 stn=permute(stn,[3,2,1]); %turn 1x1xNl into Nlx1x1
             end
         end
-
+        %%%%%% BASE VALS %%%%%%
         %Also get size in a vector for the Cluster
         lSz=cat(1,sc.Loops.Size);   %Cluster size
         nbC=cat(1,sc.Loops.nbCells);%nb of cells
@@ -236,7 +226,7 @@ for i=1:nbFiles
         %u are the unique valus and ic their position at lOd. We count
         %the diferent ics and save the amount of them in the positions
         %given by u/2 (since u is always even it works perfectly).
-        lOd(lOd>maxL)=maxL;
+        lOd(lOd>maxCl)=maxCl;
         [u,~,ic]=unique(lOd);
         baseRes(u/2,i,1) =accumarray(ic,1);
         baseRes(2,i,1) = sc.Clt4.nbCells; %Cluster4 is no longer being counted in lSz
@@ -249,22 +239,22 @@ for i=1:nbFiles
             baseRes(2,i,4)=sc.TotalVolume-sum(clV);
         end
         %Count unique clusters size - almost the same but no u/2
-        lSz(lSz>maxL)=maxL;
+        lSz(lSz>maxCl)=maxCl;
         [u,~,ic]=unique(lSz);
         baseRes(u,i,2) =accumarray(ic,1);
         baseRes(2,i,2) = sc.Clt4.nbCells; %Cluster4 is no longer being counted in lSz
         
-        %Anisotropy
+        %%%%%% ANISOTROPY %%%%%%
         if aniOF
             an=clusterAnisotropy(sc,gr);
             aniRes{i} =an;
         end
-        %Void Ratio
+        %%%%%% VOID RATIO %%%%%%
         if vrOF
             %analyse VR
             %mean value per step
             if isempty(sc.Loops(end).VoidRatio)
-                sc = clusterVRangle(sc,gr);sv=1;
+                sc = clusterVR(sc,gr);sv=1;
             end
             clVR=[cat(1,sc.Loops.Order),cat(1,sc.Loops.VoidRatio)];
             [avrgVR,lpOd]= groupsummary(clVR(:,2), clVR(:,1), @mean);
@@ -279,17 +269,30 @@ for i=1:nbFiles
                 cat(1,sc.Loops.Z), 1-cat(1,sc.Loops.Deformability)];
             resVRZ{i,2}=[ones(sc.Clt4.nbCells,1)*4, sc.Clt4.VoidRatio,...
                 sc.Clt4.Z, 1-sc.Clt4.Z/3];
+            %save total vr
+            if isempty(sc.TotalVR)
+                [~,vS,vV]=totalVoidRatio(sc,gr);
+                vrTot(i)=vV/vS;
+            else
+                vrTot(i)=sc.TotalVR;
+            end
+            
         end
-        %Deformability
+        %%%%%% DEFORMABILITY %%%%%%
         if defOF
             %deformability in singleLoops is calculated by Nclosed/Ntotal,
             %but Nopen/Ntotal has a better meaning as a Perfect loop 4 will
             %have a deformability of 0 (non deformable). Thus the def is
             %recalculated as (lp.Deformability).
-            defRes{i}=[lOd,lSz,cat(1,sc.Loops.Deformability);  %def O>4
-                4*ones(sc.Clt4.nbCells,2),1-cat(1,sc.Clt4.Z)/3]; %def O==4
+            % def contain : [Order, Size, Def, Nedges, Nopen]
+            def=cat(1,sc.Loops.Deformability);          %deformability
+            nbCe=cellfun(@height, {sc.Loops.ClEdges})';  %nb closed edges
+            nTot=nbCe./(1-def);                         %total edges
+            defRes{i,1}=[lOd,lSz,def,nTot,nTot-nbCe];   %clusters O>4
+            [nbD4,d4]=groupcounts(1-cat(1,sc.Clt4.Z)/3);
+            defRes{i,2}=[d4,nbD4];                      %clusters O===4
         end
-        %Stress
+        %%%%%% STRESS %%%%%%
         if strOF
             if isempty(sc.Loops(1).Stress)
                 sc=clusterStress(sc,step,app,gr);sv=1;
@@ -299,7 +302,7 @@ for i=1:nbFiles
             strRes{i}=[lS [cat(1,sc.Loops.Stress) cat(1,sc.Loops.Volume);
                 sc.Clt4.Stress,sc.Clt4.Volume]];
         end
-        %ClusterTransf
+        %%%%%% TRANSFORMATION %%%%%%
         if trOF
             %identify the cells from the sc that are clusters cat 4 or 6
             %and save in a new 'cl' object
@@ -320,9 +323,19 @@ for i=1:nbFiles
             %Save values for next step
             clOld=cl;%grOld=gr;
         end
-        %Vtk plot - based o Cluster order
+        %%%%%% AVE GRAIN CATEGORY %%%%%%
+        if aveOF
+            gr = aveCluster(gr,sc);
+            fnm=fullfile(pathAve,"Clusters_"+step+".vtk");
+            vtkwrite(fnm,'unstructured_grid',...
+                gr.Coord(:,1),gr.Coord(:,2),gr.Coord(:,3),...
+                'SCALARS','Radius',gr.Radius,...
+                'SCALARS','Ave_Cat',gr.AveCluster,...
+                'PRECISION',10);
+            aveCl(:,i)=gr.AveCluster;
+        end
+        %%%%%% BASE VTK WRITING %%%%%%
         if vtkOF
-            %copy only the correct lines
             fnm=fullfile(pathVTK,"Clusters_"+step+".vtk");
             drawClst=cat(1,sc.Loops.Vertices);
             ord=cat(1,sc.Loops.Order);
@@ -451,12 +464,12 @@ if vrOF
     vrData=vrData(1:f,:,:);
     %add cluster order indicator to first line after rotating it
     vrData=cat(2,(2:2:2*(size(vrData,1)))'.*ones(1,1,2),vrData);
-    %save .txt file
 
     %Save resVRZ file
     %Create an object
     resBs.Mean=vrData;
     resBs.ClusterVRZ=resVRZ;
+    resBs.TotalVR=vrTot;
     pD=plotData("Normal",resBs,app,prefix);
     fnm=fullfile(MakePath(app,'LOOPVR'),...
         "Loops-VR"+N1+"to"+N2+"int"+interval+".mat");
@@ -477,6 +490,7 @@ end
 %ClusterTransformation
 if trOF
     ctRes.ClTransf=trRes;       %cl transf results
+    ctRes.Stress=strRes;        %axial stress per step
     ctRes.Strain=xAxis;         %axial strain per step
     ctRes.NbClst=resO;          %nb cluster per order
     ctRes.NbCell=resC;          %nb cells per order
@@ -486,8 +500,22 @@ if trOF
         "Loops-Transf"+N1+"to"+N2+"int"+interval+".mat");
     save(fnm,'pD','-v7.3');    %save
     clTransfPlotter(pD,app)
+
 end
 
+if aveOF
+    %Add first colum as the nb of grain and first line as step array
+    aveCL=[ [0 stepArray'] ; [(1:app.NbGrains)'  aveCl]];
+    fnm=fullfile(pathAve,"Average_Cluste_pGrain_"+N1+"to"+N2+"int"+interval+".txt");
+    fid = fopen(fnm, 'w');
+    fprintf(fid, '## Average Cluster per Grain ##\n');
+    fprintf(fid, 'Step_Init|Step_Final|Interval\n');
+    fprintf(fid, '%d|%d|%d\n',N1,N2,interval);
+    fprintf(fid, '\n');
+    fprintf(fid,['V%d' repmat('|V%d',1,nbFiles) '\n'] ,0:nbFiles);
+    fprintf(fid,['%d' repmat('|%d',1,nbFiles) '\n'] ,aveCL');
+    fclose(fid);
+end
 %Copy forcechains.vtk files, interesting only on 2D cases
 if ~vtkOF || D==3; return;end
 %copy grains VTK files inside the directory for better visualization
@@ -502,6 +530,7 @@ for i=1:nbFiles
 end
 cd(OldF);
 end
+
 %load functions
 function LoopsLoad(app,mode)
 %LOOPSLOAD load already calculated Loops
@@ -631,13 +660,23 @@ switch upper(mode)
         end
         clTransfPlotter(pD,app)
     case 'ANISOTROPY'
-        [fnm,fPath]=MatLoader('LOOPA',app,'off');
+        [fnm,fPath]=MatLoader('LOOPA',app,'on');
         if fPath==0;warndlg('No files were chosen, Try again.');return;end
-        pD=load(fullfile(fPath,fnm)).pD;
-        pD.Prefix="Load";
-        clAniPlotter(pD,app)
+        if iscell(fnm) && numel(fnm)>1
+            for i=1:numel(fnm)
+                n=fnm{i};
+                pD=load(fullfile(fPath,n)).pD;
+                pD.Prefix=n(1:strfind(n,'.mat')-1);
+                clAniPlotter(pD,app)
+            end
+        else
+            pD=load(fullfile(fPath,fnm)).pD;
+            pD.Prefix="Load";
+            clAniPlotter(pD,app)
+        end
 end %end Switch
 end %end load
+
 %plot functions
 function lPlotter(pD,app)
 %LOOPSPLOTTER plot the evolution of loops using SubPlotter applicatioon
@@ -653,6 +692,21 @@ if ~isa(pD(1).Results,'struct')
     return
 end
 
+if numel(pD)>1
+    pltIndv=0;
+    %Ask user if, for multi-load, plot results of individual cluster files
+    answer = questdlg('Plot cluster results for each file separately?', ...
+    	'Extra figures', ...
+    	'Yes','No');
+    % Handle response
+    switch answer
+        case 'Yes'
+            pltIndv=1;
+        case 'No'
+            pltIndv=0;
+    end
+    
+end
 % N1=app.N1EF.Value;
 % N2=app.N2EF.Value;
 % interval=app.CalcInt.Value;
@@ -663,16 +717,15 @@ end
 
 %matlab default colors to mantain every class in the same clor
 if numel(pD)<8
-    C=app.PlotColors;
+    C = app.PlotColors;
 else
     C = graphClrCode(size(pD,2));%plot colorcode
 end
-%percentile value
-p=app.LPPctEF.Value;
 
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 %If any of the loaded files is a Qcst simultaion, the plot will be done
 %using pressure as x-axis
@@ -680,8 +733,8 @@ xlab='Axial strain';
 x='e';
 for i=1:numel(pD)
     if pD(i).SimType==3
-       xlab='Mean pressure (kPA)';
-       x='p';  
+        xlab='Mean pressure (kPA)';
+        x='p';
     end
 end
 %prepare paths
@@ -690,20 +743,22 @@ pathB=MakePath(app,'LOOPS');
 png=".png";
 %fig=".fig";
 
-%% Multifiles plot
+%%%%%%%%%%%%%%%% Multifiles plot %%%%%%%%%%%%%%%%
 
 if numel(pD)>1
-    nb=14;
+    nb=18;
     fA(nb)=figure;axA(nb)=axes(fA(nb));hold(axA(nb),'on');
     for i=1:(nb-1)
         fA(i)=figure;axA(i)=axes(fA(i));hold(axA(i),'on');
     end
-%     pct=cell(numel(pD),2); %will percentiles data for later
+    data=zeros(numel(pD),4,4);
     for i=1:numel(pD)
         if strcmpi(x,'p')
             xaxis= pD(i).Results.Pressure;
+            [~,pkPos]=min(abs(xaxis-pD(i).InfPts.p(end)));
         else
             xaxis= pD(i).Results.Strain;
+            [~,pkPos]=min(abs(xaxis-pD(i).InfPts.ez(end)));
         end
         opts={'Color',C(i,:)};
         for j=1:numel(pD(i).InfPts.q)
@@ -713,40 +768,99 @@ if numel(pD)>1
                 opts=[opts,{'Pointx',pD(i).InfPts.ez(j)}]; %#ok<AGROW>
             end
         end
-        rO=(pD(i).Results.Order);totO=sum(rO(2:end,2:end),1); %Orders
-        rC=(pD(i).Results.Cells);totC=sum(rC(2:end,2:end),1); %Cells
-        
+        rO=(pD(i).Results.Order(1:end,2:end));totO=sum(rO,1); %Orders
+        rC=(pD(i).Results.Cells(1:end,2:end));totC=sum(rC,1); %Cells
+        rC=rC./(ones(size(rC,1),1)*totC);
         %Order
         j=1;
-            %Numbers of Orders
-        plotMark(app,axA(j),xaxis,rO(2,2:end),opts{:});j=j+1; %Order 4=f(Ez)
-        plotMark(app,axA(j),xaxis,rO(3,2:end),opts{:});j=j+1; %Order 6=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rO(4:10,2:end),1),opts{:});j=j+1; %Order 8-20=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rO(11:end,2:end),1),opts{:});j=j+1; %Order 22=f(Ez)
-            %ratio of Orders
-        plotMark(app,axA(j),xaxis,rO(2,2:end)./totO,opts{:});j=j+1; %Order 4=f(Ez)
-        plotMark(app,axA(j),xaxis,rO(3,2:end)./totO,opts{:});j=j+1; %Order 6=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rO(4:10,2:end)./totO,1),opts{:});j=j+1; %Order 8-20=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rO(11:end,2:end)./totO,1),opts{:});j=j+1; %Order 22=f(Ez)
-            %MaxOrder=f(Ez)
-        plotMark(app,axA(j),xaxis,rO(1,2:end),opts{:});j=j+1; %MaxOrder=f(Ez)
-            %percentile
-%         pct{i,1}=percentile(rO,p);
-%         plotMark(app,axA(6),xaxis,pct{i,1},'Color',C(i,:));j=j+1;
-            %ratio of Cells
-        plotMark(app,axA(j),xaxis,rC(2,2:end)./totC,opts{:});j=j+1; %Ratio Order 4=f(Ez)
-        plotMark(app,axA(j),xaxis,rC(3,2:end)./totC,opts{:});j=j+1; %Ratio Order 6=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rC(4:10,2:end)./totC,1),opts{:});j=j+1; %Ratio Order 8-20=f(Ez)
-        plotMark(app,axA(j),xaxis,sum(rC(11:end,2:end)./totC,1),opts{:}); %Ratio Order 22=f(Ez)
+        %Numbers of Orders
+        plotMark(app,axA(j),xaxis,rO(2,:),opts{:});j=j+1;               %Order 4=f(Ez)
+        plotMark(app,axA(j),xaxis,rO(3,:),opts{:});j=j+1;               %Order 6=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rO(4:10,:),1),opts{:});j=j+1;     %Order 8-20=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rO(11:end,:),1),opts{:});j=j+1;   %Order 22=f(Ez)
+        %ratio of Orders
+        plotMark(app,axA(j),xaxis,rO(2,:)./totO,opts{:});j=j+1;             %Order 4=f(Ez)
+        plotMark(app,axA(j),xaxis,rO(3,:)./totO,opts{:});j=j+1;             %Order 6=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rO(4:10,:)./totO,1),opts{:});j=j+1;   %Order 8-20=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rO(11:end,:)./totO,1),opts{:});j=j+1; %Order 22=f(Ez)
+        %MaxOrder=f(Ez)
+        plotMark(app,axA(j),xaxis,rO(1,:),opts{:});j=j+1; %MaxOrder=f(Ez)
+        %ratio of Cells
+        plotMark(app,axA(j),xaxis,rC(2,:),opts{:});j=j+1;             %Ratio Order 4=f(Ez)
+        plotMark(app,axA(j),xaxis,rC(3,:),opts{:});j=j+1;             %Ratio Order 6=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rC(4:19,:),1),opts{:});j=j+1;   %Ratio Order 8-20=f(Ez)
+        plotMark(app,axA(j),xaxis,sum(rC(11:end,:),1),opts{:});       %Ratio Order 22=f(Ez)
         %Size
-        rS=(pD(i).Results.Size);
-        j=j+1;plotMark(app,axA(j),xaxis,rS(1,2:end),opts{:});
+        rS=(pD(i).Results.Size(1:end,2:end));
+        j=j+1;
+        plotMark(app,axA(j),xaxis,rS(1,:),opts{:});
+
+        %Create a mark a max q/p and final state for each specimen for each
+        %cluster category
+        j=j+1;
+        %Order 4
+        data(i,:,1)=[xaxis(pkPos),rC(2,pkPos+1),xaxis(end),rC(2,end)]; 
+        scatter(axA(j),data(i,[1,3],1),data(i,[2,4],1) );j=j+1;
+        %Order 6
+        data(i,:,2)=[xaxis(pkPos),rC(3,pkPos+1),xaxis(end),rC(3,end)];
+        scatter(axA(j),data(i,[1,3],2),data(i,[2,4],2) );j=j+1;
+        %Order 8
+        data(i,:,3)=[xaxis(pkPos),sum(rC(4:10,pkPos+1),1),xaxis(end),sum(rC(4:10,end),1)];
+        scatter(axA(j),data(i,[1,3],3),data(i,[2,4],3) );j=j+1;
+        %Order 22
+        data(i,:,4)=[xaxis(pkPos),sum(rC(11:end,pkPos+1),1),xaxis(end),sum(rC(11:end,end),1)];
+        scatter(axA(j),data(i,[1,3],4),data(i,[2,4],4) )
+
     end
+
+    %create log law with data matrix
+    for ii=1:4
+        if ii==1
+            mp=[0.5,0,0,0,0];            %Cl4
+            side=["left","left"];
+        elseif ii==2
+            mp=[0.5,0,-0.0005,0,0];           %Cl6
+            side=["left","left"];
+        elseif ii==3
+            mp=[0.6,0,0,0,0.005];  %Cl8
+            side=["left","left"];
+        else
+            mp=[0.3,10,0.005,10,0];%Cl22
+            side=["left","left"];
+        end
+        %Failure state
+        [ft,gof]=fit(data(:,1,ii),data(:,2,ii),fittype('a*log10(x)+b')); 
+        x=[min(data(:,1,ii)),max(data(:,1,ii))];y=[min(data(:,2,ii)),max(data(:,2,ii))];
+        axes(axA(nb-4+ii))
+        p=plot(ft,'--k',x,y);
+        p(2).LineWidth=1;
+        delete(axA(nb-4+ii).Children(2))
+        xx=(x(1)+x(2))*mp(1);
+        text(axA(nb-4+ii),xx+mp(2),(ft.a*log10(xx)+ft.b)+mp(3),...
+            {'',"     Failure state, R2 = "+ sprintf("%02.f ",gof.rsquare*100)+ "%"},...
+            'HorizontalAlignment',side(1),'Color','black','FontSize',12)
+
+        %Final state
+        [ft,gof]=fit(data(:,3,ii),data(:,4,ii),fittype('a*log10(x)+b'));
+        x=[min(data(:,3,ii)),max(data(:,3,ii))];y=[min(data(:,4,ii)),max(data(:,4,ii))];
+        axes(axA(nb-4+ii))
+        p=plot(ft,':k',x,y);
+        p(2).LineWidth=1;
+        delete(axA(nb-4+ii).Children(2))
+        xx=(x(1)+x(2))*mp(1);
+        text(axA(nb-4+ii),xx+mp(4),(ft.a*log10(xx)+ft.b)+mp(5),...
+            {'',"     Final state, R2 = " + sprintf("%02.f",gof.rsquare*100) + "%"},...
+            'HorizontalAlignment',side(2),'Color','black','FontSize',12)
+
+    end
+
+
     leglocation=["northeast";"northeast";"southeast";
         "southeast";"northeast";"northeast";"southeast";
-        "southeast";"northwest";%"northwest";
+        "southeast";"northwest";
         "northeast";"northeast";"southeast";"southeast";
-        "northwest";"northwest"];
+        "northwest";
+        "northeast";"northeast";"southeast";"southeast"];
     titles=["Number of Clusters Order 4";
         "Number of Clusters Order 6";
         "Number of Clusters Order 8-20";
@@ -756,46 +870,52 @@ if numel(pD)>1
         "Ratio of Clusters Order 8-20";
         "Ratio of Clusters Order 22+";
         "Maximal Cluster Order";
-        %"Order of "+num2str(p)+" Percentile Cluster";
         "Ratio of Cells Order 4";
         "Ratio of Cells Order 6";
         "Ratio of Cells Order 8-20";
         "Ratio of Cells Order 22+";
         "Maximal Cluster Size";
-        "Size of "+num2str(p)+" Percentile Cluster"];
+        "Ratio of Cells Order 4";
+        "Ratio of Cells Order 6";
+        "Ratio of Cells Order 8-20";
+        "Ratio of Cells Order 22+"];
     ylab=["Number of Clusters";"Number of Clusters";
         "Number of Clusters";"Number of Clusters";
         "Ratio of Clusters";"Ratio of Clusters";
         "Ratio of Clusters";"Ratio of Clusters";
-        "Max Order";%"Order";
+        "Max Order";
         "Ratio of Cells";"Ratio of Cells";
         "Ratio of Cells";"Ratio of Cells";
-        "Max Size";"Size"];
+        "Max Size";        
+        "Ratio of Cells";"Ratio of Cells";
+        "Ratio of Cells";"Ratio of Cells"];
     fnm=["Cluster_Order_Nb_4";"Cluster_Order_Nb_6";
         "Cluster_Order_Nb_8";"Cluster_Order_Nb_22";
         "Cluster_Order_Pct_4";"Cluster_Order_Pct_6";
         "Cluster_Order_Pct_8";"Cluster_Order_Pct_22";
-        "Cluster_Order_Max";%"Cluster_Order_Pctile";
+        "Cluster_Order_Max";
         "Cluster_Cell_4";"Cluster_Cell_6";
         "Cluster_Cell_8";"Cluster_Cell_22";
-        "Cluster_Size_Max";"Cluster_Size_Pct"];
+        "Cluster_Size_Max";
+        "Cluster_Law_4";"Cluster_Law_6";
+        "Cluster_Law_8";"Cluster_Law_22"];
     for i=1:nb
-        if leg;legend(axA(i),pD.FileName,'location',leglocation(i));end
+        if leg && i<nb-4;legend(axA(i),pD.FileName,'location',leglocation(i));end
         if tit;title(axA(i),titles(i));end
         ylabel(axA(i),ylab(i))
         xlabel(axA(i),xlab)
         if strcmpi(x,'p');axA(i).XLim(1)=0;end
-%         if i==7
-%             axA(i).YLim=[0.78,0.94];
-%         elseif i==8
-%             axA(i).YLim=[0.05,0.12];
-%         elseif i==9
-%             axA(i).YLim=[0.01,0.11];
-%         elseif i==10
-%             axA(i).YLim=[0,0.014];
-%         end
+        %         if i==7
+        %             axA(i).YLim=[0.78,0.94];
+        %         elseif i==8
+        %             axA(i).YLim=[0.05,0.12];
+        %         elseif i==9
+        %             axA(i).YLim=[0.01,0.11];
+        %         elseif i==10
+        %             axA(i).YLim=[0,0.014];
+        %         end
         saveas(fA(i),fullfile(pathA,pD(1).Prefix+fnm(i)+png));
-        if i==1 
+        if i==1
             if (fA(i).Position(3:4)~=app.Figsize)
                 app.Figsize=fA(i).Position(3:4);
             end
@@ -803,352 +923,354 @@ if numel(pD)>1
     end
 end
 
-%% Single files plot (also run on multifiles, for each of them)
-
-%FIGURE CREATION
-%figures for Order and size
-nOrd=3; %number of figures
-nb=nOrd*size(pD,2);
-fB(nb)=figure;axB(nb)=axes(fB(nb));hold(axB(nb),'on'); %order
-%fC(nb)=figure;axC(nb)=axes(fC(nb));hold(axC(nb),'on');
-for i=1:(nb-1)
-    fB(i)=figure;axB(i)=axes(fB(i));hold(axB(i),'on'); %#ok<*LAXES>
-    %fC(i)=figure;axC(i)=axes(fC(i));hold(axC(i),'on');
-end
-%figure Percentage of Cl Order, cells and volume
+%%%%%%%%%%%%%%%% Single files plot (also run on multifiles, for each of them) %%%%%%%%%%%%%%%%
+if numel(pD)==1 || pltIndv
+    %FIGURE CREATION
+    %figures for Order and size
+    nOrd=3; %number of figures
+    nb=nOrd*size(pD,2);
+    fB(nb)=figure;axB(nb)=axes(fB(nb));hold(axB(nb),'on'); %order
+    %fC(nb)=figure;axC(nb)=axes(fC(nb));hold(axC(nb),'on');
+    for i=1:(nb-1)
+        fB(i)=figure;axB(i)=axes(fB(i));hold(axB(i),'on'); %#ok<*LAXES>
+        %fC(i)=figure;axC(i)=axes(fC(i));hold(axC(i),'on');
+    end
+    %figure Percentage of Cl Order, cells and volume
     %%check if volume exists in all pD objects
-doVol=1;nPct=6;
-for j=1:size(pD,2)
-    if isempty(pD(j).Results.Volume);doVol=0;nPct=4;end
-end
-nb=nPct*size(pD,2);
-fD(nb)=figure;axD(nb)=axes(fD(nb));hold(axD(nb),'on'); %order
-for i=1:(nb-1)
-    fD(i)=figure;axD(i)=axes(fD(i));hold(axD(i),'on'); %#ok<*LAXES>
-end
-%figures comparaision Size-Order, nb of Cells
-nCmp=2;
-nb=nCmp*size(pD,2);
-fE(nb)=figure;axE(nb)=axes(fE(nb));hold(axE(nb),'on');
-for i=1:(nb-1)
-    fE(i)=figure;axE(i)=axes(fE(i));hold(axE(i),'on');
-end
+    doVol=1;nPct=6;
+    for j=1:size(pD,2)
+        if isempty(pD(j).Results.Volume);doVol=0;nPct=4;end
+    end
+    nb=nPct*size(pD,2);
+    fD(nb)=figure;axD(nb)=axes(fD(nb));hold(axD(nb),'on'); %order
+    for i=1:(nb-1)
+        fD(i)=figure;axD(i)=axes(fD(i));hold(axD(i),'on'); %#ok<*LAXES>
+    end
+    %figures comparaision Size-Order, nb of Cells
+    nCmp=2;
+    nb=nCmp*size(pD,2);
+    fE(nb)=figure;axE(nb)=axes(fE(nb));hold(axE(nb),'on');
+    for i=1:(nb-1)
+        fE(i)=figure;axE(i)=axes(fE(i));hold(axE(i),'on');
+    end
 
-%PLOTTER
-for j=1:size(pD,2)
-    %Either 1 file loaded or multifile
-    if size(pD,2)==1
-        pfx=pD.Prefix;
-        path=pathB;
-    else
-        pfx=pD(j).FileName;
-        path=pathA;
-    end
-    if strcmpi(x,'p')
-        xaxis= pD(j).Results.Pressure;
-    else
-        xaxis= pD(j).Results.Strain;
-    end
-    opts={'Color',[0 0 0]}; %color will be changed later
-    for i=1:numel(pD(j).InfPts.q)
-        if strcmpi(x,'p')
-            opts=[opts,{'Pointx',pD(j).InfPts.p(i)}]; %#ok<AGROW>
+    %PLOTTER
+    for j=1:size(pD,2)
+        %Either 1 file loaded or multifile
+        if size(pD,2)==1
+            pfx=pD.Prefix;
+            path=pathB;
         else
-            opts=[opts,{'Pointx',pD(j).InfPts.ez(i)}]; %#ok<AGROW>
+            pfx=pD(j).FileName;
+            path=pathA;
         end
-    end
-    %get all the different results : order, size, nb of cells and strain.
-    rO=(pD(j).Results.Order);      %order (vector)
-    totO=sum(rO(2:end,2:end),1);    %number of clusters (scalar)
-    rS=(pD(j).Results.Size);       %size (vector)
-    rC=(pD(j).Results.Cells);      %cells (vector)
-    totC=sum(rC(2:end,2:end),1);    %number of cells (scalar)
-    if doVol
-        rV=(pD(j).Results.Volume);     %volume (vector)
-        totV=sum(rV(2:end,2:end),1);    %total volume (scalar)
-    end
-    for i=1:4
-        switch i
-            case {1,2}
-                pO=rO(i+1,2:end);
-                pS=rS(i+1,2:end);
-                pC=rC(i+1,2:end);
-                if doVol;pV=rV(i+1,2:end);end
-            case 3
-                pO=sum(rO(4:10,2:end),1);
-                pS=sum(rS(4:10,2:end),1);
-                pC=sum(rC(4:10,2:end),1);
-                if doVol;pV=sum(rV(4:10,2:end),1);end
-            case 4
-                pO=sum(rO(11:end,2:end),1);
-                pS=sum(rS(11:end,2:end),1);
-                pC=sum(rC(11:end,2:end),1);
-                if doVol;pV=sum(rV(11:end,2:end),1);end
+        if strcmpi(x,'p')
+            xaxis= pD(j).Results.Pressure;
+        else
+            xaxis= pD(j).Results.Strain;
         end
-        opts{2}=C(i,:);
-        %CLUSTER NUMBER
-        plotMark(app,axB((j-1)*nOrd+1),xaxis,pO,opts{:}); %Order =f(Ez)
-        plotMark(app,axD((j-1)*nPct+1),xaxis,pO./totO,opts{:}); %Order/totO =f(Ez)
-        plotMark(app,axD((j-1)*nPct+3),xaxis,pC./totC,opts{:}); %Cells/totC =f(Ez)
-        if doVol %Vol/totVol =f(Ez)
-            plotMark(app,axD((j-1)*nPct+5),xaxis,pV./totV,opts{:});
-        end         
-        %CLUSTER NUMBER NO4
-        if i~=1 
-            plotMark(app,axB((j-1)*nOrd+2),xaxis,pO,opts{:});
-            plotMark(app,axD((j-1)*nPct+2),xaxis,pO./totO,opts{:});
-            plotMark(app,axD((j-1)*nPct+4),xaxis,pC./totC,opts{:});
-            if doVol
-                plotMark(app,axD((j-1)*nPct+6),xaxis,pV./totV,opts{:});
+        opts={'Color',[0 0 0]}; %color will be changed later
+        for i=1:numel(pD(j).InfPts.q)
+            if strcmpi(x,'p')
+                opts=[opts,{'Pointx',pD(j).InfPts.p(i)}]; %#ok<AGROW>
+            else
+                opts=[opts,{'Pointx',pD(j).InfPts.ez(i)}]; %#ok<AGROW>
             end
-        end 
-        %CLUSTER ORDER Vs SIZE
-        plotMark(app,axE((j-1)*nCmp+1),xaxis,pS-pO,opts{:}); %Cluster size-Order =f(Ez)
-    end
-    opts{2}=C(1,:);
-    plotMark(app,axB((j-1)*nOrd+3),xaxis,rO(1,2:end),opts{:}); %maximal order
-%     if size(pD,2)==1
-%         pct=cell(1,2);
-%         pct{1,1}=percentile(rO,p);
-%         %pct{1,2}=percentile(rS,p);
-%     end
-%     plotMark(app,axB((j-1)*nOrd+4),xaxis,pct{j,1},'Color',C(i,:)); %percentile order
-    plotMark(app,axE((j-1)*nCmp+2),xaxis,totC,opts{:}); %nb of cells
-    
-    if leg
-        %Order
-        legend(axB((j-1)*nOrd+1),"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'location','northeast')
-        legend(axB((j-1)*nOrd+2),"Order 6","Order 8-20",...
-            "Order 22+",'location','northeast')
-        %Size
-%         legend(axC((j-1)*npl+1),"Size 4","Size 5","Size 6-12",...
-%             "Size 13+",'location','eastoutside')
-%         legend(axC((j-1)*npl+2),"Size 5","Size 6-12",...
-%             "Size 13+",'location','eastoutside')
-        %Order ratio
-        legend(axD((j-1)*nPct+1),"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'location','east')
-        legend(axD((j-1)*nPct+2),"Order 6","Order 8-20",...
-            "Order 22+",'location','east')
-        %Cell ratio
-        legend(axD((j-1)*nPct+3),"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'location','northeast')
-        legend(axD((j-1)*nPct+4),"Order 6","Order 8-20",...
-            "Order 22+",'location','southeast')
+        end
+        %get all the different results : order, size, nb of cells and strain.
+        rO=(pD(j).Results.Order);      %order (vector)
+        totO=sum(rO(2:end,2:end),1);    %number of clusters (scalar)
+        rS=(pD(j).Results.Size);       %size (vector)
+        rC=(pD(j).Results.Cells);      %cells (vector)
+        totC=sum(rC(2:end,2:end),1);    %number of cells (scalar)
         if doVol
-            %Volume ratio
-            legend(axD((j-1)*nPct+5),"Order 4","Order 6","Order 8-20",...
-                "Order 22+",'location','northeast')
-            legend(axD((j-1)*nPct+6),"Order 6","Order 8-20",...
-                "Order 22+",'location','southeast')
+            rV=(pD(j).Results.Volume);     %volume (vector)
+            totV=sum(rV(2:end,2:end),1);    %total volume (scalar)
         end
-        %size/order
-        legend(axE(j),"S4/O4","S5/O6","S6-12/O8-20",...
-            "S13+/O22+",'location','northeast')
-    end
-    
-    %titles
-    if tit
-        title(axB((j-1)*nOrd+1),'Number per Order Category')
-        title(axB((j-1)*nOrd+2),'Number per Order Category')
-        title(axB((j-1)*nOrd+3),'Max Cluster Order')
-%       title(axB((j-1)*nOrd+4),['Cluster Order ' num2str(p) ' Percentile'])
-%       title(axC((j-1)*npl+1),'Number per Size Category')
-%       title(axC((j-1)*npl+2),'Number per Size Category')
-%       title(axC((j-1)*npl+3),'Max Cluster Size')
-%       title(axC((j-1)*npl+4),['Cluster Size ' num2str(p) ' Percentile'])
-        title(axD((j-1)*nPct+1),'Number Ratio per Order Category')
-        title(axD((j-1)*nPct+2),'Number Ratio per Order Category')
-        title(axD((j-1)*nPct+3),'Cells Ratio per Order Category')
-        title(axD((j-1)*nPct+4),'Cells Ratio per Order Category')
+        for i=1:4
+            switch i
+                case {1,2}
+                    pO=rO(i+1,2:end);
+                    pS=rS(i+1,2:end);
+                    pC=rC(i+1,2:end);
+                    if doVol;pV=rV(i+1,2:end);end
+                case 3
+                    pO=sum(rO(4:10,2:end),1);
+                    pS=sum(rS(4:10,2:end),1);
+                    pC=sum(rC(4:10,2:end),1);
+                    if doVol;pV=sum(rV(4:10,2:end),1);end
+                case 4
+                    pO=sum(rO(11:end,2:end),1);
+                    pS=sum(rS(11:end,2:end),1);
+                    pC=sum(rC(11:end,2:end),1);
+                    if doVol;pV=sum(rV(11:end,2:end),1);end
+            end
+            opts{2}=C(i,:);
+            %CLUSTER NUMBER
+            plotMark(app,axB((j-1)*nOrd+1),xaxis,pO,opts{:}); %Order =f(Ez)
+            plotMark(app,axD((j-1)*nPct+1),xaxis,pO./totO,opts{:}); %Order/totO =f(Ez)
+            plotMark(app,axD((j-1)*nPct+3),xaxis,pC./totC,opts{:}); %Cells/totC =f(Ez)
+            if doVol %Vol/totVol =f(Ez)
+                plotMark(app,axD((j-1)*nPct+5),xaxis,pV./totV,opts{:});
+            end
+            %CLUSTER NUMBER NO4
+            if i~=1
+                plotMark(app,axB((j-1)*nOrd+2),xaxis,pO,opts{:});
+                plotMark(app,axD((j-1)*nPct+2),xaxis,pO./totO,opts{:});
+                plotMark(app,axD((j-1)*nPct+4),xaxis,pC./totC,opts{:});
+                if doVol
+                    plotMark(app,axD((j-1)*nPct+6),xaxis,pV./totV,opts{:});
+                end
+            end
+            %CLUSTER ORDER Vs SIZE
+            plotMark(app,axE((j-1)*nCmp+1),xaxis,pS-pO,opts{:}); %Cluster size-Order =f(Ez)
+        end
+        opts{2}=C(1,:);
+        plotMark(app,axB((j-1)*nOrd+3),xaxis,rO(1,2:end),opts{:}); %maximal order
+        %     if size(pD,2)==1
+        %         pct=cell(1,2);
+        %         pct{1,1}=percentile(rO,p);
+        %         %pct{1,2}=percentile(rS,p);
+        %     end
+        %     plotMark(app,axB((j-1)*nOrd+4),xaxis,pct{j,1},'Color',C(i,:)); %percentile order
+        plotMark(app,axE((j-1)*nCmp+2),xaxis,totC,opts{:}); %nb of cells
+
+        if leg
+            %Order
+            legend(axB((j-1)*nOrd+1),"Small","Submedium","Medium",...
+                "Large",'location','northeast')
+            legend(axB((j-1)*nOrd+2),"Submedium","Medium",...
+                "Large",'location','northeast')
+            %Size
+            %         legend(axC((j-1)*npl+1),"Size 4","Size 5","Size 6-12",...
+            %             "Size 13+",'location','eastoutside')
+            %         legend(axC((j-1)*npl+2),"Size 5","Size 6-12",...
+            %             "Size 13+",'location','eastoutside')
+            %Order ratio
+            legend(axD((j-1)*nPct+1),"Small","Submedium","Medium",...
+                "Large",'location','east')
+            legend(axD((j-1)*nPct+2),"Submedium","Medium",...
+                "Large",'location','east')
+            %Cell ratio
+            legend(axD((j-1)*nPct+3),"Small","Submedium","Medium",...
+                "Large",'location','northeast')
+            legend(axD((j-1)*nPct+4),"Submedium","Medium",...
+                "Large",'location','southeast')
+            if doVol
+                %Volume ratio
+                legend(axD((j-1)*nPct+5),"Small","Submedium","Medium",...
+                    "Large",'location','northeast')
+                legend(axD((j-1)*nPct+6),"Submedium","Medium",...
+                    "Large",'location','southeast')
+            end
+            %size/order
+            legend(axE((j-1)*nCmp+1),"S4/O4","S5/O6","S6-12/O8-20",...
+                "S13+/O22+",'location','northeast')
+        end
+
+        %titles
+        if tit
+            title(axB((j-1)*nOrd+1),'Number per Order Category')
+            title(axB((j-1)*nOrd+2),'Number per Order Category')
+            title(axB((j-1)*nOrd+3),'Max Cluster Order')
+            %       title(axB((j-1)*nOrd+4),['Cluster Order ' num2str(p) ' Percentile'])
+            %       title(axC((j-1)*npl+1),'Number per Size Category')
+            %       title(axC((j-1)*npl+2),'Number per Size Category')
+            %       title(axC((j-1)*npl+3),'Max Cluster Size')
+            %       title(axC((j-1)*npl+4),['Cluster Size ' num2str(p) ' Percentile'])
+            title(axD((j-1)*nPct+1),'Number Ratio per Order Category')
+            title(axD((j-1)*nPct+2),'Number Ratio per Order Category')
+            title(axD((j-1)*nPct+3),'Cells Ratio per Order Category')
+            title(axD((j-1)*nPct+4),'Cells Ratio per Order Category')
+            if doVol
+                title(axD((j-1)*nPct+5),'Volume Ratio per Order Category')
+                title(axD((j-1)*nPct+6),'Volume Ratio per Order Category')
+            end
+            title(axE((j-1)*nCmp+1),'Evolutio of Size-Order')
+            title(axE((j-1)*nCmp+2),'Evolutio of nb Cells')
+        end
+        %plot1 nb ORDER=f(Ez)
+        ylabel(axB((j-1)*nOrd+1),'Number of Cluster')
+        xlabel(axB((j-1)*nOrd+1),xlab)
+        if size(pD,2)>1
+            axB((j-1)*nOrd+1).YLim(2)=axA(1).YLim(2);
+            yticks(axB((j-1)*nOrd+1),'auto');
+            fB((j-1)*nOrd+1).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axB((j-1)*nOrd+1).XLim(1)=0;end
+        fnm=pfx+"Cl_Order";
+        saveas(fB((j-1)*nOrd+1),fullfile(path,fnm+png));
+
+        %plot2 nb ORDER=f(Ez) no Clusters 4
+        ylabel(axB((j-1)*nOrd+2),'Number of Clusters')
+        xlabel(axB((j-1)*nOrd+2),xlab)
+        if size(pD,2)>1
+            axB((j-1)*nOrd+2).YLim(2)=max(axA(2).YLim(2),axA(3).YLim(2));
+            yticks(axB((j-1)*nOrd+2),'auto');
+            fB((j-1)*nOrd+2).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axB((j-1)*nOrd+2).XLim(1)=0;end
+        fnm=pfx+"Cl_Order_N4";
+        saveas(fB((j-1)*nOrd+2),fullfile(path,fnm+png));
+
+        %plot3 ORDER Max
+        ylabel(axB((j-1)*nOrd+3),'Max Order')
+        xlabel(axB((j-1)*nOrd+3),xlab)
+        if size(pD,2)>1
+            axB((j-1)*nOrd+3).YLim(2)=axA(9).YLim(2);
+            yticks(axB((j-1)*nOrd+3),'auto');
+            fB((j-1)*nOrd+3).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axB((j-1)*nOrd+3).XLim(1)=0;end
+        fnm=pfx+"Cl_Order_Max";
+        saveas(fB((j-1)*nOrd+3),fullfile(path,fnm+png));
+
+        %     %plot4 ORDER percentile
+        %     ylabel(axB((j-1)*nOrd+4),'Order 99 percentile')
+        %     xlabel(axB((j-1)*nOrd+4),xlab)
+        %     if size(pD,2)>1
+        %         axB((j-1)*nOrd+4).YLim(2)=axA(6).YLim(2);
+        %         yticks(axB((j-1)*nOrd+4),'auto');
+        %         fB((j-1)*nOrd+4).Position(3:4)=app.Figsize;
+        %     end
+        %     if strcmpi(x,'p');axB((j-1)*nOrd+1).XLim(1)=0;end
+        %     fnm=pfx+"Cl_Order_Pctile";
+        %     saveas(fB((j-1)*nOrd+4),fullfile(path,fnm+png));
+        %     %saveas(fB((j-1)*npl+4),path+fnm+fig);
+
+        %     %plot1 SIZE Clusters=f(Ez)
+        %     ylabel(axC((j-1)*npl+1),'Number of Clusters')
+        %     xlabel(axC((j-1)*npl+1),xlab)
+        %     if size(pD,2)>1
+        %         axC((j-1)*npl+1).YLim(2)=axA(6).YLim(2);
+        %         yticks(axC((j-1)*npl+1),'auto');
+        %         fC((j-1)*npl+1).Position(3:4)=app.Figsize;
+        %     end
+        %     fnm=pfx+"ClSize";
+        %     saveas(fC((j-1)*npl+1),fullfile(path,fnm+png));
+        %     %saveas(fC((j-1)*npl+1),path+fnm+fig);
+        %
+        %     %plot2 SIZE Clusters=f(Ez) no Clusters 4
+        %     ylabel(axC((j-1)*npl+2),'Number of Clusters')
+        %     xlabel(axC((j-1)*npl+2),xlab)
+        %     if size(pD,2)>1
+        %         axC((j-1)*npl+2).YLim(2)=max(axA(7).YLim(2),axA(8).YLim(2));
+        %         yticks(axC((j-1)*npl+2),'auto');
+        %         fC((j-1)*npl+2).Position(3:4)=app.Figsize;
+        %     end
+        %     fnm=pfx+"ClSizeN4";
+        %     saveas(fC((j-1)*npl+2),fullfile(path,fnm+png));
+        %     %saveas(fC((j-1)*npl+2),path+fnm+fig);
+        %
+        %     %plot3 SIZE Max Clustersize
+        %     ylabel(axC((j-1)*npl+3),'Max Size')
+        %     xlabel(axC((j-1)*npl+3),xlab)
+        %     if size(pD,2)>1
+        %         axC((j-1)*npl+3).YLim(2)=axA(10).YLim(2);
+        %         yticks(axC((j-1)*npl+3),'auto');
+        %         fC((j-1)*npl+3).Position(3:4)=app.Figsize;
+        %     end
+        %     fnm=pfx+"ClSizeMax";
+        %     saveas(fC((j-1)*npl+3),fullfile(path,fnm+png));
+        %     %saveas(fC((j-1)*npl+3),path+fnm+fig);
+        %
+        %     %plot4 SIZE percentile
+        %     ylabel(axC((j-1)*npl+4),'Size')
+        %     xlabel(axC((j-1)*npl+4),xlab)
+        %     if size(pD,2)>1
+        %         axC((j-1)*npl+4).YLim(2)=axA(12).YLim(2);
+        %         yticks(axC((j-1)*npl+4),'auto');
+        %         fC((j-1)*npl+4).Position(3:4)=app.Figsize;
+        %     end
+        %     fnm=pfx+"ClSizePctile";
+        %     saveas(fC((j-1)*npl+4),fullfile(path,fnm+png));
+        %     %saveas(fC((j-1)*npl+4),path+fnm+fig);
+
+        %Ratio RATIO Nb=f(Ez)
+        ylabel(axD((j-1)*nPct+1),'Cluster Ratio')
+        xlabel(axD((j-1)*nPct+1),xlab)
+        if size(pD,2)>1
+            axB((j-1)*nOrd+1).YLim(2)=axA(10).YLim(2);
+            yticks(axB((j-1)*nOrd+1),'auto');
+            fD((j-1)*nPct+1).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axD((j-1)*nPct+1).XLim(1)=0;end
+        fnm=pfx+"Cl_Order_Pct";
+        saveas(fD((j-1)*nPct+1),fullfile(path,fnm+png));
+
+        %Ratio RATIO Nb=f(Ez) no Clusters 4
+        ylabel(axD((j-1)*nPct+2),'Clusters Ratio')
+        xlabel(axD((j-1)*nPct+2),xlab)
+        if size(pD,2)>1
+            axB((j-1)*nOrd+2).YLim(2)=max(axA(11).YLim(2),axA(12).YLim(2));
+            yticks(axB((j-1)*nOrd+2),'auto');
+            fD((j-1)*nPct+2).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axD((j-1)*nPct+2).XLim(1)=0;end
+        fnm=pfx+"Cl_Order_Pct_N4";
+        saveas(fD((j-1)*nPct+2),fullfile(path,fnm+png));
+
+        %Ratio RATIO CELLS=f(Ez)
+        ylabel(axD((j-1)*nPct+3),'Cells Ratio')
+        xlabel(axD((j-1)*nPct+3),xlab)
+        if size(pD,2)>1
+            fD((j-1)*nPct+3).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axD((j-1)*nPct+3).XLim(1)=0;end
+        fnm=pfx+"Cl_Cells_Pct";
+        saveas(fD((j-1)*nPct+3),fullfile(path,fnm+png));
+
+        %Ratio RATIO CELLS=f(Ez) no Clusters 4
+        ylabel(axD((j-1)*nPct+4),'Cells Ratio')
+        xlabel(axD((j-1)*nPct+4),xlab)
+        if size(pD,2)>1
+            fD((j-1)*nPct+4).Position(3:4)=app.Figsize;
+        end
+        if strcmpi(x,'p');axD((j-1)*nPct+4).XLim(1)=0;end
+        fnm=pfx+"Cl_Cells_Pct_N4";
+        saveas(fD((j-1)*nPct+4),fullfile(path,fnm+png));
+
         if doVol
-            title(axD((j-1)*nPct+5),'Volume Ratio per Order Category')
-            title(axD((j-1)*nPct+6),'Volume Ratio per Order Category')
-        end
-        title(axE((j-1)*nCmp+1),'Evolutio of Size-Order')
-        title(axE((j-1)*nCmp+2),'Evolutio of nb Cells')
-    end
-    %plot1 nb ORDER=f(Ez)
-    ylabel(axB((j-1)*nOrd+1),'Number of Cluster')
-    xlabel(axB((j-1)*nOrd+1),xlab)
-    if size(pD,2)>1
-        axB((j-1)*nOrd+1).YLim(2)=axA(1).YLim(2);
-        yticks(axB((j-1)*nOrd+1),'auto');
-        fB((j-1)*nOrd+1).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axB((j-1)*nOrd+1).XLim(1)=0;end
-    fnm=pfx+"Cl_Order";
-    saveas(fB((j-1)*nOrd+1),fullfile(path,fnm+png));
-    
-    %plot2 nb ORDER=f(Ez) no Clusters 4
-    ylabel(axB((j-1)*nOrd+2),'Number of Clusters')
-    xlabel(axB((j-1)*nOrd+2),xlab)
-    if size(pD,2)>1
-        axB((j-1)*nOrd+2).YLim(2)=max(axA(2).YLim(2),axA(3).YLim(2));
-        yticks(axB((j-1)*nOrd+2),'auto');
-        fB((j-1)*nOrd+2).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axB((j-1)*nOrd+2).XLim(1)=0;end
-    fnm=pfx+"Cl_Order_N4";
-    saveas(fB((j-1)*nOrd+2),fullfile(path,fnm+png));
-    
-    %plot3 ORDER Max
-    ylabel(axB((j-1)*nOrd+3),'Max Order')
-    xlabel(axB((j-1)*nOrd+3),xlab)
-    if size(pD,2)>1
-        axB((j-1)*nOrd+3).YLim(2)=axA(9).YLim(2);
-        yticks(axB((j-1)*nOrd+3),'auto');
-        fB((j-1)*nOrd+3).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axB((j-1)*nOrd+3).XLim(1)=0;end
-    fnm=pfx+"Cl_Order_Max";
-    saveas(fB((j-1)*nOrd+3),fullfile(path,fnm+png));
-    
-%     %plot4 ORDER percentile
-%     ylabel(axB((j-1)*nOrd+4),'Order 99 percentile')
-%     xlabel(axB((j-1)*nOrd+4),xlab)
-%     if size(pD,2)>1
-%         axB((j-1)*nOrd+4).YLim(2)=axA(6).YLim(2);
-%         yticks(axB((j-1)*nOrd+4),'auto');
-%         fB((j-1)*nOrd+4).Position(3:4)=app.Figsize;
-%     end
-%     if strcmpi(x,'p');axB((j-1)*nOrd+1).XLim(1)=0;end
-%     fnm=pfx+"Cl_Order_Pctile";
-%     saveas(fB((j-1)*nOrd+4),fullfile(path,fnm+png));
-%     %saveas(fB((j-1)*npl+4),path+fnm+fig);
-    
-%     %plot1 SIZE Clusters=f(Ez)
-%     ylabel(axC((j-1)*npl+1),'Number of Clusters')
-%     xlabel(axC((j-1)*npl+1),xlab)
-%     if size(pD,2)>1
-%         axC((j-1)*npl+1).YLim(2)=axA(6).YLim(2);
-%         yticks(axC((j-1)*npl+1),'auto');
-%         fC((j-1)*npl+1).Position(3:4)=app.Figsize;
-%     end
-%     fnm=pfx+"ClSize";
-%     saveas(fC((j-1)*npl+1),fullfile(path,fnm+png));
-%     %saveas(fC((j-1)*npl+1),path+fnm+fig);
-%     
-%     %plot2 SIZE Clusters=f(Ez) no Clusters 4
-%     ylabel(axC((j-1)*npl+2),'Number of Clusters')
-%     xlabel(axC((j-1)*npl+2),xlab)
-%     if size(pD,2)>1
-%         axC((j-1)*npl+2).YLim(2)=max(axA(7).YLim(2),axA(8).YLim(2));
-%         yticks(axC((j-1)*npl+2),'auto');
-%         fC((j-1)*npl+2).Position(3:4)=app.Figsize;
-%     end
-%     fnm=pfx+"ClSizeN4";
-%     saveas(fC((j-1)*npl+2),fullfile(path,fnm+png));
-%     %saveas(fC((j-1)*npl+2),path+fnm+fig);
-%     
-%     %plot3 SIZE Max Clustersize
-%     ylabel(axC((j-1)*npl+3),'Max Size')
-%     xlabel(axC((j-1)*npl+3),xlab)
-%     if size(pD,2)>1
-%         axC((j-1)*npl+3).YLim(2)=axA(10).YLim(2);
-%         yticks(axC((j-1)*npl+3),'auto');
-%         fC((j-1)*npl+3).Position(3:4)=app.Figsize;
-%     end
-%     fnm=pfx+"ClSizeMax";
-%     saveas(fC((j-1)*npl+3),fullfile(path,fnm+png));
-%     %saveas(fC((j-1)*npl+3),path+fnm+fig);
-%     
-%     %plot4 SIZE percentile
-%     ylabel(axC((j-1)*npl+4),'Size')
-%     xlabel(axC((j-1)*npl+4),xlab)
-%     if size(pD,2)>1
-%         axC((j-1)*npl+4).YLim(2)=axA(12).YLim(2);
-%         yticks(axC((j-1)*npl+4),'auto');
-%         fC((j-1)*npl+4).Position(3:4)=app.Figsize;
-%     end
-%     fnm=pfx+"ClSizePctile";
-%     saveas(fC((j-1)*npl+4),fullfile(path,fnm+png));
-%     %saveas(fC((j-1)*npl+4),path+fnm+fig);
-    
-    %Ratio RATIO Nb=f(Ez)
-    ylabel(axD((j-1)*nPct+1),'Cluster Ratio')
-    xlabel(axD((j-1)*nPct+1),xlab)
-    if size(pD,2)>1
-        axB((j-1)*nOrd+1).YLim(2)=axA(10).YLim(2);
-        yticks(axB((j-1)*nOrd+1),'auto');
-        fD((j-1)*nPct+1).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axD((j-1)*nPct+1).XLim(1)=0;end
-    fnm=pfx+"Cl_Order_Pct";
-    saveas(fD((j-1)*nPct+1),fullfile(path,fnm+png));
-    
-    %Ratio RATIO Nb=f(Ez) no Clusters 4
-    ylabel(axD((j-1)*nPct+2),'Clusters Ratio')
-    xlabel(axD((j-1)*nPct+2),xlab)
-    if size(pD,2)>1
-        axB((j-1)*nOrd+2).YLim(2)=max(axA(11).YLim(2),axA(12).YLim(2));
-        yticks(axB((j-1)*nOrd+2),'auto');
-        fD((j-1)*nPct+2).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axD((j-1)*nPct+2).XLim(1)=0;end
-    fnm=pfx+"Cl_Order_Pct_N4";
-    saveas(fD((j-1)*nPct+2),fullfile(path,fnm+png));
-    
-    %Ratio RATIO CELLS=f(Ez)
-    ylabel(axD((j-1)*nPct+3),'Cells Ratio')
-    xlabel(axD((j-1)*nPct+3),xlab)
-    if size(pD,2)>1
-        fD((j-1)*nPct+3).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axD((j-1)*nPct+3).XLim(1)=0;end
-    fnm=pfx+"Cl_Cells_Pct";
-    saveas(fD((j-1)*nPct+3),fullfile(path,fnm+png));
-    
-    %Ratio RATIO CELLS=f(Ez) no Clusters 4
-    ylabel(axD((j-1)*nPct+4),'Cells Ratio')
-    xlabel(axD((j-1)*nPct+4),xlab)
-    if size(pD,2)>1
-        fD((j-1)*nPct+4).Position(3:4)=app.Figsize;
-    end
-    if strcmpi(x,'p');axD((j-1)*nPct+4).XLim(1)=0;end
-    fnm=pfx+"Cl_Cells_Pct_N4";
-    saveas(fD((j-1)*nPct+4),fullfile(path,fnm+png));
+            %Ratio VOLUME =f(Ez)
+            ylabel(axD((j-1)*nPct+5),'Volume Ratio')
+            xlabel(axD((j-1)*nPct+5),xlab)
+            if size(pD,2)>1
+                fD((j-1)*nPct+5).Position(3:4)=app.Figsize;
+            end
+            if strcmpi(x,'p');axD((j-1)*nPct+5).XLim(1)=0;end
+            fnm=pfx+"Cl_Volume_Pct";
+            saveas(fD((j-1)*nPct+5),fullfile(path,fnm+png));
 
-    if doVol
-        %Ratio VOLUME =f(Ez)
-        ylabel(axD((j-1)*nPct+5),'Volume Ratio')
-        xlabel(axD((j-1)*nPct+5),xlab)
-        if size(pD,2)>1
-            fD((j-1)*nPct+5).Position(3:4)=app.Figsize;
+            %Ratio VOLUME =f(Ez) no Clusters 4
+            ylabel(axD((j-1)*nPct+6),'Volume Ratio')
+            xlabel(axD((j-1)*nPct+6),xlab)
+            if size(pD,2)>1
+                fD((j-1)*nPct+6).Position(3:4)=app.Figsize;
+            end
+            if strcmpi(x,'p');axD((j-1)*nPct+6).XLim(1)=0;end
+            fnm=pfx+"Cl_Volume_Pct_N4";
+            saveas(fD((j-1)*nPct+6),fullfile(path,fnm+png));
         end
-        if strcmpi(x,'p');axD((j-1)*nPct+5).XLim(1)=0;end
-        fnm=pfx+"Cl_Volume_Pct";
-        saveas(fD((j-1)*nPct+5),fullfile(path,fnm+png));
-    
-        %Ratio VOLUME =f(Ez) no Clusters 4
-        ylabel(axD((j-1)*nPct+6),'Volume Ratio')
-        xlabel(axD((j-1)*nPct+6),xlab)
-        if size(pD,2)>1
-            fD((j-1)*nPct+6).Position(3:4)=app.Figsize;
-        end
-        if strcmpi(x,'p');axD((j-1)*nPct+6).XLim(1)=0;end
-        fnm=pfx+"Cl_Volume_Pct_N4";
-        saveas(fD((j-1)*nPct+6),fullfile(path,fnm+png));
-    end
 
-    %SIZE/ORDER
-    ylabel(axE((j-1)*nCmp+1),'Size-Order')
-    xlabel(axE((j-1)*nCmp+1),xlab)
-    if strcmpi(x,'p');axE((j-1)*nCmp+1).XLim(1)=0;end
-    fnm=pfx+"Cl_Size_Ord";
-    fE((j-1)*nCmp+1).Position(3:4)=app.Figsize;
-    saveas(fE((j-1)*nCmp+1),fullfile(path,fnm+png));
-    %saveas(fE((j-1)*nCmp+1),path+fnm+fig);
-    
-    %Total Nb of Cells
-    ylabel(axE((j-1)*nCmp+2),'Nb of Cells')
-    xlabel(axE((j-1)*nCmp+2),xlab)
-    if strcmpi(x,'p');axE((j-1)*nCmp+2).XLim(1)=0;end
-    fnm=pfx+"Cl_Nb_of_Cells";
-    fE((j-1)*nCmp+2).Position(3:4)=app.Figsize;
-    saveas(fE((j-1)*nCmp+2),fullfile(path,fnm+png));
-    %saveas(fE((j-1)*nCmp+2),path+fnm+fig);
+        %SIZE/ORDER
+        ylabel(axE((j-1)*nCmp+1),'Size-Order')
+        xlabel(axE((j-1)*nCmp+1),xlab)
+        if strcmpi(x,'p');axE((j-1)*nCmp+1).XLim(1)=0;end
+        fnm=pfx+"Cl_Size_Ord";
+        fE((j-1)*nCmp+1).Position(3:4)=app.Figsize;
+        saveas(fE((j-1)*nCmp+1),fullfile(path,fnm+png));
+        %saveas(fE((j-1)*nCmp+1),path+fnm+fig);
+
+        %Total Nb of Cells
+        ylabel(axE((j-1)*nCmp+2),'Nb of Cells')
+        xlabel(axE((j-1)*nCmp+2),xlab)
+        if strcmpi(x,'p');axE((j-1)*nCmp+2).XLim(1)=0;end
+        fnm=pfx+"Cl_Nb_of_Cells";
+        fE((j-1)*nCmp+2).Position(3:4)=app.Figsize;
+        saveas(fE((j-1)*nCmp+2),fullfile(path,fnm+png));
+        %saveas(fE((j-1)*nCmp+2),path+fnm+fig);
+
+    end
 
 end
 
@@ -1157,51 +1279,56 @@ end
 if ~leg
     %Multi legend
     if numel(pD)>1
-        o=copyobj(fA(1),0);
-        l=legend(o.CurrentAxes,pD.FileName,'Orientation','horizontal');
-        set(o.CurrentAxes,'Visible','Off')
+        ii=copyobj(fA(1),0);
+        l=legend(ii.CurrentAxes,pD.FileName,'NumColumns',6,...
+            'Orientation','horizontal');
+        l.EdgeColor='none';
+        set(ii.CurrentAxes,'Visible','Off')
         % Set the figure Position using the normalized legend Position vector
         % as a multiplier to the figure's current position in pixels This sets
         % the figure to have the same size as the legend
-        set(o,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(o,'Position')));
+        set(ii,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(ii,'Position')));
         % The legend is still offset so set its normalized position vector to
         % fill the figure
         set(l,'Position',[0,0,1,1]);
         % Put the figure back in the middle screen area
-        set(o, 'Position', get(o,'Position') + [500, 400, 0, 0]);
-        saveas(o,path+"Legend_Multi"+png);
+        set(ii, 'Position', get(ii,'Position') + [500, 400, 0, 0]);
+        saveas(ii,pathA+"Legend_Multi"+png);
+        delete(ii)
     end
-    %Order 4+ Legend
-    p=copyobj(fB(1),0);
-    l=legend(p.CurrentAxes,"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'Orientation','horizontal');
-    l.EdgeColor='none';
-    set(p.CurrentAxes,'Visible','Off')
-    set(p,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(p,'Position')));
-    set(l,'Position',[0,0,1,1]);
-    set(p, 'Position', get(p,'Position') + [500, 400, 0, 0]);
-    saveas(p,path+"Legend_Order"+png);
-    
-    %order 6+Legend
-    q=copyobj(fB(2),0);
-    l=legend(q.CurrentAxes,"Order 6","Order 8-20",...
-            "Order 22+",'Orientation','horizontal');
-    l.EdgeColor='none';
-    set(q.CurrentAxes,'Visible','Off')
-    set(q,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(q,'Position')));
-    set(l,'Position',[0,0,1,1]);
-    set(q, 'Position', get(q,'Position') + [500, 400, 0, 0]);
-    saveas(q,path+"Legend_Order_No4"+png);
-    
-    %Delete extra figures
-    delete([p,q]);
-    if numel(pD)>1;delete(o);end
+    if numel(pD)==1 || pltIndv
+        %Order 4+ Legend
+        p=copyobj(fB(1),0);
+        l=legend(p.CurrentAxes,"Small","Submedium","Medium",...
+            "Large",'Orientation','horizontal');
+        l.EdgeColor='none';
+        set(p.CurrentAxes,'Visible','Off')
+        set(p,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(p,'Position')));
+        set(l,'Position',[0,0,1,1]);
+        set(p, 'Position', get(p,'Position') + [500, 400, 0, 0]);
+        saveas(p,pathA+"Legend_Order"+png);
+
+        %order 6+Legend
+        q=copyobj(fB(2),0);
+        l=legend(q.CurrentAxes,"Submedium","Medium",...
+            "Large",'Orientation','horizontal');
+        l.EdgeColor='none';
+        set(q.CurrentAxes,'Visible','Off')
+        set(q,'Position',(get(l,'Position').*[0, 0, 1, 1].*get(q,'Position')));
+        set(l,'Position',[0,0,1,1]);
+        set(q, 'Position', get(q,'Position') + [500, 400, 0, 0]);
+        saveas(q,pathA+"Legend_Order_No4"+png);
+
+        %Delete extra figures
+        delete([p,q])
+    end
 end
 
 if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,...
         app.ExeAllButton) || size(pD,2)>1 
-    delete([fB,fD,fE]);
-    %delete([fB,fC,fD,fE]);
+    try delete(fB);catch;end
+    try delete(fD);catch;end
+    try delete(fE);catch;end
 end
 end
 function clAniPlotter(pD,app)
@@ -1223,6 +1350,7 @@ if pD.SimType==3
     xVals=pD.Results.Pressure;
 end
 lw={'LineWidth',1.5};
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 % Initial variables
 res=pD.Results.Anisotropy{1};%Nstep x {Nloops x [Order SurfVal GrvtVal] x Category}
@@ -1307,9 +1435,12 @@ end
 %PLOTGROUP 1 - 
 nAtn=nAt-1; %take into account the dif between the two properties
 if strcmp(pD.Prefix,"Load")
-    path=MakePath(app,'LOOPAL');
+    path=MakePath(app,'LOOPAL');del=0;
+elseif strcmp(pD.Prefix,"total")
+    path=MakePath(app,'LOOPA');del=0;
 else
-    path=MakePath(app,'LOOPA');
+    path=fullfile(MakePath(app,'LOOPA'),pD.Prefix);del=1;
+    if exist(path,'dir')==0;mkdir(path);end
 end
 png=".png";
 lTyp=["-";"-|";"-x"];
@@ -1343,11 +1474,12 @@ for c=1:nclCat
             f(c,7)=figure;axf(aT,3)=axes(f(c,7));hold(axf(aT,3),'on');
             f(c,8)=figure;axf(aT,4)=axes(f(c,8));hold(axf(aT,4),'on');
         else
-            axf(aT,1)=nexttile(tf(1));hold(axf(aT,1),'on');
+            axf(aT,1)=nexttile(tf(1));hold(axf(aT,1),'on'); 
             axf(aT,2)=nexttile(tf(2));hold(axf(aT,2),'on');
             axf(aT,3)=nexttile(tf(3));hold(axf(aT,3),'on');
             axf(aT,4)=nexttile(tf(4));hold(axf(aT,4),'on');
         end
+
         for p=1:2*nCag
             if p<=nCag
                 %Elevation ratio 
@@ -1482,7 +1614,8 @@ if ~leg
     saveas(p,path+"Legend_Azi"+png);
     delete(p);
 end
-if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,app.ExeAllButton)
+if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,app.ExeAllButton)...
+        || del==1
     try delete([f,h]);
     catch ME
         if strcmp(ME.identifier,'MATLAB:UndefinedFunction')
@@ -1501,7 +1634,6 @@ function clDefPlotter(pD,app)
 %    Prepare the values calculated by the main function plot the evolution
 %    of the derivative of loops, deformability and Size vs Order values
 
-
 xlab='Axial strain';
 x='e';
 for i=1:numel(pD)
@@ -1518,30 +1650,71 @@ try lw=app.PlotWidthEF.Value;
 catch
     lw=1.5;
 end
-
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
+boolNbEdges=1;
 
 %Prepare variables
 nF=numel(pD);%nb of files loaded
-nb=3;   %nb of variables to plot
+nb=5;   %nb of variables to plot
 %prepare files
 if nF>1 
     %if more than one file was loaded
     Res=cell(nF,1);
-    defRes=double.empty(0,3);
+    defRes=double.empty(0,3);           %def results for O>4
+    defRes4=[(0:4)'/6 , zeros(5,1)];    %def results for O==4
+    resNbE=double.empty(0,3);           %account nb of edges if this is calculated
     for j=1:nF
-        r=cat(1,pD(j).Results.SOD{:});
-        [avrgS,axSoO]= groupsummary(r(:,2), r(:,1), @mean);
+        r=cat(1,pD(j).Results.SOD{:,1});
+        [avrgS,axO]= groupsummary(r(:,2), r(:,1), @mean);
         [avrgSoO,~]= groupsummary(r(:,2)./r(:,1), r(:,1), @mean);
         [avrgDfO,~]= groupsummary(r(:,3), r(:,1), @mean);
-        Res{j}=[axSoO,avrgS,avrgSoO,avrgDfO]; %Order - AveSize - AveRat - AveDef
+        Res{j}=[axO,avrgS,avrgSoO,avrgDfO]; %Order - AveSize - AveRat - AveDef
         %defRes=cat(1,defRes,unique(r,'rows'));
-        defRes=cat(1,defRes,r);
+        if size(pD(j).Results.SOD,2)==1
+            %save results for O==4
+            cl4=r(:,1)==4;
+            [nbD4,d4]=groupcounts(r(cl4,3));
+            [chk,ia]=ismember(defRes4(:,1),d4);
+            defRes4(chk,2)=defRes4(chk,2)+nbD4(ia(ia>0));
+            %save other results
+            defRes=cat(1,defRes,r(~cl4,1:3));
+            %if one of the files do not have edges info 
+            boolNbEdges=0;
+        else
+            %save other results
+            defRes=cat(1,defRes,r(:,1:3));
+            %save results 4
+            r4=cat(1,pD(j).Results.SOD{:,2});
+            [nbD4,d4]= groupsummary(r4(:,2), r4(:,1), @sum);
+            [chk,ia]=ismember(defRes4(:,1),d4);
+            defRes4(chk,2)=defRes4(chk,2)+nbD4(ia(ia>0));
+            %nb of edges
+            resNbE=cat(1,resNbE,r(:,[1,4,5]));
+        end
     end
     nb=nb+3;   %plotting only distribution for the total file
 else
-    defRes=cat(1,pD.Results.SOD{:});
+    r=cat(1,pD.Results.SOD{:,1});
+    if size(pD.Results.SOD,2)==1
+        %save results for O==4
+        cl4=r(:,1)==4;
+        [nbD4,d4]=groupcounts(r(cl4,3));
+        defRes4=[d4,nbD4];
+        %save other results
+        defRes=r(~cl4,1:3);
+        boolNbEdges=0;
+    else
+        %save other results
+        defRes=r(:,1:3);
+        %save results 4
+        r4=cat(1,pD.Results.SOD{:,2});
+        [nbD4,d4]= groupsummary(r4(:,2), r4(:,1), @sum);
+        defRes4=[d4,nbD4];
+        %nb of edges
+        resNbE=r(:,[1,4,5]);
+    end
 end
-
+nb=nb+2*boolNbEdges;
 
 %Start figures
 f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
@@ -1553,8 +1726,8 @@ end
 path=MakePath(app,'LOOPDL');
 png=".png";
 
-%SCATTER SIZE=F(ORDER)
-SnO=defRes(defRes(:,1)>0,1:2);
+%%%%%%%%%%%%%%%%%%%%%%%%%% SCATTER SIZE=F(ORDER) %%%%%%%%%%%%%%%%%%%%%%%%%%
+SnO=[4,4;defRes(defRes(:,1)>0,1:2)];
 i=1;
 [avrgS,axS]= groupsummary(SnO(:,2), SnO(:,1), @mean);
 %if max(axS)>300;f(i).Position(3)=2*f(i).Position(3);end
@@ -1574,31 +1747,29 @@ delete(ax(i).Children(3))
 hLeg=findobj(f(i),'type','legend');
 set(hLeg,'visible','off')
 
-%SCATTER SIZE/ORDER=F(ORDER)
+%%%%%%%%%%%%%%%%%%%%%% SCATTER (SIZE/ORDER)=F(ORDER) %%%%%%%%%%%%%%%%%%%%%%
 so=SnO(:,2)./SnO(:,1);
 i=i+1;
-[avrgS,axSoO]= groupsummary(so, SnO(:,1), @mean);
+[avrgS,axO]= groupsummary(so, SnO(:,1), @mean);
 %if max(axSoO)>300;f(i).Position(3)=2*f(i).Position(3);end
 sct=unique([SnO(:,1),so],'rows');
 scatter(ax(i),sct(:,1),sct(:,2),'x','MarkerEdgeColor',[0.6 0.6 0.6])
-plot(ax(i),axSoO,avrgS,'k','LineWidth',lw)
-estO=4:2:max(axSoO);
+plot(ax(i),axO,avrgS,'k','LineWidth',lw)
+estO=4:2:max(axO);
 plot(ax(i),estO,(2+estO/2)./estO,'r','LineWidth',lw)
 
-%SCATTER DEF=F(ORDER)
+%%%%%%%%%%%%%%%%%%%%%%%%%%% SCATTER DEF=F(ORDER) %%%%%%%%%%%%%%%%%%%%%%%%%%%
 i=i+1;
-    %check if deformability was coorectly calculated as (Nb open front)/
-    %(NB tot front). Def cannot be higher than .3
-    %canot be lower than .4
-% if min(defRes(:,3))<0.4
-%     defRes(:,3)=1-defRes(:,3);
-% end
 [avrgDfO,axDfO]= groupsummary(defRes(:,3), defRes(:,1), @mean);
-    %values
-scatter(ax(i),defRes(:,1),defRes(:,3),'x','MarkerEdgeColor',[0.6 0.6 0.6])
+%add average 4 def
+avrgDfO=[dot(defRes4(:,1),defRes4(:,2))/sum(defRes4(:,2));avrgDfO];
+axDfO=[4;axDfO];
+    %get unique values and plot
+udef=[ones(5,1)*4,(0:4)'/6; unique([defRes(:,1),defRes(:,3)],'rows')];
+scatter(ax(i),udef(:,1),udef(:,2),'x','MarkerEdgeColor',[0.6 0.6 0.6])
     %get min and max values for each order
-maxD= groupsummary(defRes(:,3), defRes(:,1), @max);
-minD= groupsummary(defRes(:,3), defRes(:,1), @min);
+maxD= groupsummary(defRes(:,3), defRes(:,1), @max); maxD=[4/6;maxD];
+minD= groupsummary(defRes(:,3), defRes(:,1), @min); minD=[0;minD];
     %check for places where there is no dif between vals and average
 chk=find((avrgDfO-minD)./avrgDfO<=0.01 | (maxD-avrgDfO)./avrgDfO<=0.01);
 m=minD;mx=maxD;
@@ -1615,8 +1786,10 @@ for l=1:numel(chk)
     end
 end
 minD=m;maxD=mx;
+w=ones(numel(axDfO),1);
+w(axDfO>220)=500;
     %modify them, fit values
-ftmax=fit(axDfO,maxD,fittype({'x','log(x)','1'}));
+ftmax=fit(axDfO,maxD,fittype({'x','1'}),'Weight',w);
 ftmin=fit(axDfO,minD,fittype({'x','log(x)','1'}));
 axes(ax(i))
 p=plot(ftmax,'-b',axDfO,maxD);
@@ -1630,32 +1803,189 @@ plot(ax(i),axDfO,avrgDfO,'k','LineWidth',lw)
     %remove the generated pts
 delete(ax(i).Children([3,5]))
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%% Count Def values %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+i=i+1;
+%count the nb of unique deformability values per order
+cntDef=unique(defRes(:,[1,3]),'rows');
+nbUDefO = groupcounts(cntDef(:,1));
+%count the number of def values per order
+[nbDefO,axO] = groupcounts(defRes(:,1));
+plot(ax(i),axO,nbUDefO,'Color','#000000','LineWidth',lw)
+%plot the ratio between nb of unique values over total nb o values. 0 or
+%close indicates many repetitions; 1 or close means no repetition.
+yyaxis(ax(i),'right')
+plot(ax(i),axO,nbUDefO./nbDefO,'Color','#a1a1a1','LineWidth',lw)
+ax(i).YAxis(1).Color='k';
+ax(i).YAxis(2).Color='#a1a1a1';
+
+%%%%%%%%%%%%%%%%%%%%%%%%% Granulometry like curve %%%%%%%%%%%%%%%%%%%%%%%%%
+i=i+1;
+%nb values in each category has already been calculated as nbDefO in 
+%previous section, so only the curve need to be created.
+pct=0.99;
+cs6=cumsum(nbDefO);cs6=cs6/cs6(end);
+[~,mn]=min(abs(cs6-pct));O6=axO(mn);
+p=plot(ax(i),axO,cs6,'LineWidth',lw);
+xl=xline(ax(i),O6,"--",'Color',p.Color);
+set(get(get(xl,'Annotation'),'LegendInformation'),...
+    'IconDisplayStyle','off');
+
+cs8=cumsum(nbDefO(axO>6));cs8=cs8/cs8(end);
+[~,mn]=min(abs(cs8-pct));O8=axO(mn+sum(~(axO>6)));
+p=plot(ax(i),axO(axO>6),cs8,'LineWidth',lw);
+xl=xline(ax(i),O8,"--",'Color',p.Color);
+set(get(get(xl,'Annotation'),'LegendInformation'),...
+    'IconDisplayStyle','off')
+
+cs20=cumsum(nbDefO(axO>20));cs20=cs20/cs20(end);
+[~,mn]=min(abs(cs20-pct)); O20=axO(mn+sum(~(axO>20)));
+p=plot(ax(i),axO(axO>20),cs20,'LineWidth',lw);
+xl=xline(ax(i),O20,"--",'Color',p.Color);
+set(get(get(xl,'Annotation'),'LegendInformation'),...
+    'IconDisplayStyle','off')
+
+legend(ax(i),"O>4","O>6","O>20","location","southeast")
+ax(i).XLim(1)=6;
+yl=yline(ax(i),pct,"--","Color","#A1A1A1");
+set(get(get(yl,'Annotation'),'LegendInformation'),...
+    'IconDisplayStyle','off');
+
+text(ax(i),ax(i).XLim(2)*.3,ax(i).YLim(2)*.5,...
+        {'',"99% of clusters of O>4  is Order "+num2str(O6),...
+        "99% of clusters of O>6  is Order "+num2str(O8),...
+        "99% of clusters of O>20 is Order "+num2str(O20)},...
+        'HorizontalAlignment','left','Color','black')
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Number of Edges %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if boolNbEdges
+    %%%%%%%%%%%%%%%%% Total Edges %%%%%%%%%%%%%%%%%
+    i=i+1;
+    [avrgN,axNfO]= groupsummary(resNbE(:,2), resNbE(:,1), @mean);
+    %values
+    scatter(ax(i),resNbE(:,1),resNbE(:,2),'x','MarkerEdgeColor',[0.6 0.6 0.6])
+    %get min and max values for each order
+    maxD= groupsummary(resNbE(:,2), resNbE(:,1), @max);
+    minD= groupsummary(resNbE(:,2), resNbE(:,1), @min);
+    %check for places where there is no dif between vals and average
+    chk=find((avrgN-minD)./avrgN<=0.01 | (maxD-avrgN)./avrgN<=0.01);
+    m=minD;mx=maxD;
+    for l=1:numel(chk)
+        if chk(l)<=3
+            m(1)=mean(mink(minD(1:7),3));
+            mx(1)=mean(maxk(maxD(1:5),3));
+        elseif chk(l)>=(numel(minD)-2)
+            m(end)=mean(mink(minD(end-6:end),3));
+            mx(end)=mean(maxk(maxD(end-6:end),3));
+        else
+            m(chk(l))=mean(mink(minD(chk(l)-3:chk(l)+3),3));
+            mx(chk(l))=mean(maxk(maxD(chk(l)-3:chk(l)+3),3));
+        end
+    end
+    minD=m;maxD=mx;
+    axDfO=axDfO(2:end);
+    plot(ax(i),axNfO,avrgN,'k','LineWidth',lw) %mean line
+%     ftMax=fit(axDfO,maxD,fittype({'x','log(x)','1'}));
+%     ftMin=fit(axDfO,minD,fittype({'x','log(x)','1'}));
+    ftMax=fit(axNfO,maxD,'poly1');
+    ftMin=fit(axNfO,minD,'poly1');
+    axes(ax(i))
+    p1=plot(ftMax,'b',axNfO,maxD);
+    p1(2).LineWidth=lw;
+    p2=plot(ftMin,'b',axNfO,minD);
+    p2(2).LineWidth=lw;
+    text(ax(i),ax(i).XLim(2)*.05,ax(i).YLim(2)*.95,...
+        {'',"N(max)="+num2str(ftMax.p1,'%.3f')+"*O+"+num2str(ftMax.p2,'%.3f'),...
+        "N(min)="+num2str(ftMin.p1,'%.3f')+"*O+"+num2str(ftMin.p2,'%.3f')},...
+        'HorizontalAlignment','left','Color','blue')
+    hLeg=findobj(f(i),'type','legend');
+    set(hLeg,'visible','off')
+    delete(ax(i).Children([3,5]))
+
+    %%%%%%%%%%%%%%%%% Open Edges %%%%%%%%%%%%%%%%%
+    i=i+1;
+    [avrgN,axNfO]= groupsummary(resNbE(:,3), resNbE(:,1), @mean);
+    %values
+    scatter(ax(i),resNbE(:,1),resNbE(:,3),'x','MarkerEdgeColor',[0.6 0.6 0.6])
+    %get min and max values for each order
+    maxD= groupsummary(resNbE(:,3), resNbE(:,1), @max);
+    minD= groupsummary(resNbE(:,3), resNbE(:,1), @min);
+    %check for places where there is no dif between vals and average
+    chk=find((avrgN-minD)./avrgN<=0.01 | (maxD-avrgN)./avrgN<=0.01);
+    m=minD;mx=maxD;
+    for l=1:numel(chk)
+        if chk(l)<=3
+            m(1)=mean(mink(minD(1:7),3));
+            mx(1)=mean(maxk(maxD(1:5),3));
+        elseif chk(l)>=(numel(minD)-2)
+            m(end)=mean(mink(minD(end-6:end),3));
+            mx(end)=mean(maxk(maxD(end-6:end),3));
+        else
+            m(chk(l))=mean(mink(minD(chk(l)-3:chk(l)+3),3));
+            mx(chk(l))=mean(maxk(maxD(chk(l)-3:chk(l)+3),3));
+        end
+    end
+    minD=m;maxD=mx;
+    plot(ax(i),axNfO,avrgN,'k','LineWidth',lw) %mean line
+    ftMax2=fit(axNfO,maxD,'poly1');
+    ftMin2=fit(axNfO,minD,'poly1');
+%     ftMax2=fit(axDfO,maxD,fittype({'x','log(x)','1'}));
+%     ftMin2=fit(axDfO,minD,fittype({'x','log(x)','1'}));
+    axes(ax(i))
+    p1=plot(ftMax2,'b',axNfO,maxD);
+    p1(2).LineWidth=lw;
+    p2=plot(ftMin2,'b',axNfO,minD);
+    p2(2).LineWidth=lw;
+    ax(i).YLim=ax(i-1).YLim;
+    text(ax(i),ax(i).XLim(2)*.05,ax(i).YLim(2)*.95,...
+        {'',"N(max)="+num2str(ftMax2.p1,'%.3f')+"*O+"+num2str(ftMax2.p2,'%.3f'),...
+        "N(min)="+num2str(ftMin2.p1,'%.3f')+"*O+"+num2str(ftMin2.p2,'%.3f')},...
+        'HorizontalAlignment','left','Color','blue')
+    hLeg=findobj(f(i),'type','legend');
+    set(hLeg,'visible','off')
+    delete(ax(i).Children([3,5]))
+    
+    o=copyobj(f(3),0);axo=o.CurrentAxes;
+    vs=4:2:max(axNfO);
+    cb1=(ftMax2.p1*vs+ftMax2.p2)./(ftMin.p1*vs+ftMin.p2);
+    cb2=(ftMax2.p1*vs+ftMax2.p2)./(ftMax.p1*vs+ftMax.p2);
+    cb3=(ftMin2.p1*vs+ftMin2.p2)./(ftMax.p1*vs+ftMax.p2);
+    cb4=(ftMin2.p1*vs+ftMin2.p2)./(ftMin.p1*vs+ftMin.p2);
+    
+    plot(axo,vs(cb1<1 & cb1>0.3),cb1(cb1<1 & cb1>0.3),...
+        vs(cb2<1 & cb2>0.3),cb2(cb2<1 & cb2>0.3),...
+        vs(cb3<1 & cb3>0.3),cb3(cb3<1 & cb3>0.3),...
+        vs(cb4<1 & cb4>0.3),cb4(cb4<1 & cb4>0.3),'LineWidth',lw);    
+    xlabel(axo,'Order')
+    ylabel(axo,'Deformability')
+    saveas(o,fullfile(path,'Def_Edges_Law.fig'))
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Save files %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Title
 if tit
     i=1;title(ax(i),'Evolution of Size and Order')
     i=i+1;title(ax(i),'Evolution of Size over Order')
     i=i+1;title(ax(i),'Evolution of Deformability')
+    i=i+1;title(ax(i),'Evolution of Nb of Unique Def values')
+    i=i+1;title(ax(i),'Cumulative ratio of orders')
+    if boolNbEdges
+        i=i+1;title(ax(i),'Evolution of total number of Edges')
+        i=i+1;title(ax(i),'Evolution of number of open edges')        
+    end
 end
-%First plot
+%Scatter size v order
 i=1;
 xlabel(ax(i),'Order')
 ylabel(ax(i),'Size')
-%Second plot
-i=i+1;
-xlabel(ax(i),'Order')
-ylabel(ax(i),'Size/Order')
-%Third plot
-i=i+1;
-xlabel(ax(i),'Order')
-ylabel(ax(i),'Deformability')
-
-%Plot Saves
 fnm="Size_f_Order_Scat";i=1;
 saveas(f(i),fullfile(path,fnm+png));
 
-%Plot Saves
+%Scatter size/order v order
 i=i+1;
-if max(axDfO)>200
+xlabel(ax(i),'Order')
+ylabel(ax(i),'Size/Order')
+if max(axDfO)>400
     L=ax(i).XLim;
     ax(i).XLim=[0,200];
     fnm="Size_o_Order_Scat_LowO";
@@ -1666,8 +1996,11 @@ end
 fnm="Size_o_Order_Scat";
 saveas(f(i),fullfile(path,fnm+png));
 
+%Scatter deformability
 i=i+1;
-if max(axDfO)>200
+xlabel(ax(i),'Order')
+ylabel(ax(i),'Deformability')
+if max(axDfO)>400
     L=ax(i).XLim;
     ax(i).XLim=[0,200];
     fnm="Def_Order_Scat_LowO";
@@ -1678,7 +2011,42 @@ end
 fnm="Def_Order_Scat";
 saveas(f(i),fullfile(path,fnm+png));
 
+%Unique def values
+i=i+1;
+xlabel(ax(i),'Order')
+yyaxis(ax(i), 'left')
+ylabel(ax(i),'Nb of Unique Deformabilities')
+yyaxis(ax(i), 'right')
+ylabel(ax(i),'Ratio of Unique Deformability')
+fnm="Def_Order_Unique";
+saveas(f(i),fullfile(path,fnm+png));
 
+%Cumulative ratio
+i=i+1;
+xlabel(ax(i),'Order')
+ylabel(ax(i),'Cumulative Ratio')
+fnm="Cum_Rat_Order";
+saveas(f(i),fullfile(path,fnm+png));
+
+if boolNbEdges
+    %Total edges
+    i=i+1;
+    xlabel(ax(i),'Order')
+    ylabel(ax(i),'Number of Edges')
+    fnm="Edges_Total";
+    saveas(f(i),fullfile(path,fnm+png));
+    
+    %Open Edges
+    i=i+1;
+    xlabel(ax(i),'Order')
+    ylabel(ax(i),'Number of Open Edges')
+    fnm="Edges_Open";
+    saveas(f(i),fullfile(path,fnm+png));
+    
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% If multifiles %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Save mean values of each category
 if nF>1
     % plot mean in the 'mean comparaison graphs'
     lt=["-",":","+"];
@@ -1724,24 +2092,11 @@ if nF>1
     saveas(f(i+3),fullfile(path,fnm+png));
 end
 
-% N1=app.N1EF.Value;
-% N2=app.N2EF.Value;
-% int=app.CalcInt.Value;
-% stpArray=N1:int:N2;
-% if stpArray(end)~=N2;stpArray=[stpArray,N2];end
-% strain = extStrains(app.TrialData,stpArray,N1,app,'allCalc');
-% stress = extStress(app.TrialData,stpArray,app);
-% pD.Results.Strain=strain(:,end-2);
-% pD.Results.Pressure=stress(:,end); 
-% pD.InfPts=app.TrialData.InfPts;
-% 
-% fnm=MakePath(app,'LOOPD')+"Loops-Dfblty"+N1+"to"+N2+"int"+int+".mat";
-% save(fnm,'pD','-v7.3'); 
-
+%%%%%%%%%%%%%%%%%%%% Def evolution per order over time %%%%%%%%%%%%%%%%%%%%
 lp='';%6:2:20;
 if ~isempty(lp)
     %calculate the ave deformability for each step of each file
-    aveDef=cell(numel(pD));
+    aveDef=cell(numel(pD),1);
     for i=1:numel(pD)
         ave=zeros(numel(lp),numel(pD(i).Results.SOD));
         for j=1:numel(pD(i).Results.SOD)
@@ -1806,23 +2161,26 @@ end
 if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,app.ExeAllButton)
     delete(f);
     if ~isempty(lp);delete(g);end
+    if exist(o,'var');delete(o);end
 end
 end
 function clVRPlotter(pD,app)
-%CLHISTPLOTTER plot the evolution the VR of loops each timestep
+%CLVRPLOTTER plot the evolution the VR of loops each timestep
 % This function will take the results obtained for the Cluster void ratio
 % and plot many different interesting curbs. Firstly, the pD.Results has 2
 % types of values saved in different properties. 
 
-% - The property Mean is a three dimensional matrix. On the [x,x,1] we have
-% void ratio while [x,x,2] contain coordination number results. The first
-% line contain the strain values. The first colum contain all orders. The
-% values in the table are the mean values of all clusters of the given
-% order for the given strain
-% - The property ClusterVRZ contain the value found for all clusters in the
-% given simultaion (Order,VR,Z) inside each element of a cell matrix. The
-% lines represent each strain while the first colum is all cluster and
-% secont cluster 4 values.
+% Data is contained in the following properties of pD
+% - pD.Results.Mean - N x N x 2 matrix. Contains the mean void ratio and  
+% coordination number per cluster order for each calculated step.
+% - pD.Results.ClusterVRZ - cell matrix Nx2. Inside each cell there is a
+% matrix containing the Order x VR x Z for each cluster identified. Each
+% line of the cell matrix corresponds to a calculated step, while the first
+% column contains all clusters larger 4 and the second all clusters 4.
+
+
+%boolean controlling background plot of total vr
+boolbg=1;
 
 %linetype
 if isequal(app.CourbePointsSwitch.Value,'On')
@@ -1834,6 +2192,7 @@ try lw=app.PlotWidthEF.Value;
 catch
     lw=1.5;
 end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 xlab='Axial strain';
 x='e';
@@ -1854,124 +2213,76 @@ else
 end
 
 
-%%%%%%%%%%% PLOT SCATTER %%%%%%%%%%%
-nb=2;
+%%%%%%%%%%%%%%%%%%%%% PLOT SCATTER (Z) - DENSITY (VR) %%%%%%%%%%%%%%%%%%%%%
+nbT=2; nbPl=4;
+nb=nbT*nbPl*size(pD,2);
 f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
 for i=1:(nb-1)
     f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on');
 end
 
-for j=1:nb
-    % FIRST SCATTER => VR
-    VRZ=double.empty(0,2);   %[Ord VR Z]
-    VRZ4=double.empty(0,2);  %[Ord VR Z]
-    order=NaN(5000,size(pD,2));   %Ord x numel(pD)
-    minVRZ=NaN(5000,size(pD,2));   %min x numel(pD)
-    maxVRZ=NaN(5000,size(pD,2));   %max x numel(pD)
-    aveVRZ=zeros(5000,size(pD,2)); %mean x numel(pD)
-    nbrVRZ=zeros(5000,size(pD,2)); %nb x numel(pD)
-    % all points plot
-    for i=1:size(pD,2)
-        vrz=cat(1,pD(i).Results.ClusterVRZ{:,1});
-        if j==2;vrz4=cat(1,pD(i).Results.ClusterVRZ{:,2});end
-        mx= groupsummary(vrz(:,j+1), vrz(:,1), 'max');
-        mn= groupsummary(vrz(:,j+1), vrz(:,1), 'min');
-        [av,od,nb]= groupsummary(vrz(:,j+1), vrz(:,1), 'mean');
-        order(od/2,i)=od;
-        minVRZ(od/2,i)=mn;
-        maxVRZ(od/2,i)=mx;
-        aveVRZ(od/2,i)=av;
-        nbrVRZ(od/2,i)=nb;
-        VRZ=unique([VRZ;vrz(:,[1,j+1])],'rows');
-        if j==2;VRZ4=unique([VRZ4;vrz4(:,[1,j+1])],'rows');end
-    end
-    if j==2
-        VRZ=[VRZ;VRZ4]; %#ok<AGROW>
-    end
-    
-    %Transform mmm into a column vector removing exces values (second dim)
-    if numel(pD)>1
-        order=max(order,[],2);
-        minVRZ=min(minVRZ,[],2);
-        maxVRZ=max(maxVRZ,[],2);
-        aveVRZ=sum(aveVRZ.*nbrVRZ,2)./sum(nbrVRZ,2); 
-    end
-    
-    % %remove exces lines from mmm (full 0 lines)
-    order=order(order>0);
-    minVRZ=minVRZ(order/2,:);maxVRZ=maxVRZ(order/2,:);
-    aveVRZ=aveVRZ(order/2,:);
-    %plot
-    scatter(ax(j),VRZ(:,1),VRZ(:,2),'x','MarkerEdgeColor',[0.6 0.6 0.6]) %scatter all pts
-    plot(ax(j),order(aveVRZ>0),aveVRZ(aveVRZ>0),"k"+lType,'LineWidth',lw)   %plot mean line
-
-    %check for places where there is no dif between vals and average for a mean
-    %value to be calculated with values around it
-    chk=find((aveVRZ-minVRZ)./aveVRZ<=0.01 | (maxVRZ-aveVRZ)./aveVRZ<=0.01);
-    m=minVRZ;mx=maxVRZ;
-    for l=1:numel(chk)
-        if chk(l)<=3
-            m(chk(l))=min(minVRZ(1:7));
-            mx(chk(l))=max(maxVRZ(1:7));
-        elseif chk(l)>=(numel(minVRZ)-20)
-            m(chk(l))=min(minVRZ(end-20:end));
-            mx(chk(l))=max(maxVRZ(end-20:end));
-        else
-            m(chk(l))=min(minVRZ(chk(l)-10:chk(l)+10));
-            mx(chk(l))=max(maxVRZ(chk(l)-10:chk(l)+10));
+for i=1:size(pD,2)
+    %Choose steps to plot : begining, infpts and end
+    k=size(pD(i).Results.ClusterVRZ,1);
+    str=[1,0,0,k];
+    for j=1:numel(pD(i).InfPts.ez)
+        [~,str(j+1)]=min(abs(pD(i).Results.Strain-pD(i).InfPts.ez(j)));
+        if numel(pD(i).InfPts.ez)==1
+            str(3)=floor((str(2)+str(4))/4)*2;
         end
     end
-    minVRZ=m;maxVRZ=mx;
-    %modify them, fit values
-    ftmax=fit(order,maxVRZ,fittype({'log(x)','x','1'}));
-    ftmin=fit(order,minVRZ,fittype({'log(x)','x','1'}));
-    axes(ax(j))
-    p=plot(ftmax,'-b',order,maxVRZ); %plot max line
-    p(2).LineWidth=lw;
-    p=plot(ftmin,'-b',order,minVRZ); %plot min line
-    p(2).LineWidth=lw;
-    %remove the generated pts
-    delete(ax(j).Children([2,4])) %remove points
-    %remove the autogenerated legends
-    hLeg=findobj(f(j),'type','legend');
-    set(hLeg,'visible','off')
+    for j=1:nbPl
+        n=(j-1)*nbT+(i-1)*nbPl*nbT;
+        vrz=[pD(i).Results.ClusterVRZ{str(j),1};...
+            pD(i).Results.ClusterVRZ{str(j),2}];
+        maxO=max(vrz(:,1));
+        vrzMean=pD(i).Results.Mean(2:maxO/2,[1,str(j)+1],:);
+        vrzMean=vrzMean(vrzMean(:,2,1)~=0,:,:);
+
+        %plot VR density points
+        [X,Y,map]=pointDensity(vrz(:,1:2),2,0.05);
+        surface(ax(n+1),X,Y,map,'EdgeCOlor',[.65 .65 .65])
+        plot3(ax(n+1),vrzMean(:,1,1),vrzMean(:,2,1),...
+            ones(numel(vrzMean(:,2,1)),1),"k"+lType,'LineWidth',lw)   %plot mean line
+        colormap(ax(n+1),flip(autumn))
+        if leg;colorbar(ax(n+1));end
+
+        %plot Z
+        scatter(ax(n+2),vrz(:,1),vrz(:,3),...
+            'x','MarkerEdgeColor',[0.6 0.6 0.6]) %scatter all pts
+        plot(ax(n+2),vrzMean(:,1,1),vrzMean(:,2,2),...
+            "k"+lType,'LineWidth',lw)   %plot mean line
+
+        %save files
+        strain=num2str(pD(i).Results.Strain(str(j)),'%.3f');
+        if tit;title(ax(n+1),"Void Ratio per Order ("+strain+")");end
+        ax(n+1).YLim=[0,min([4,max(cat(2,ax((i-1)*6+(1:4)).YLim))])];
+        ax(n+1).XTick=4:max(8,ceil((ax(n+1).XLim(2)-4)/20)*2):2000;
+        ylabel(ax(n+1),'Void Ratio')
+        xlabel(ax(n+1),'Cluster Order')
+
+        if tit;title(ax(n+2),"Coordination per Order ("+strain+")");end
+        ylabel(ax(n+2),'Coordination')
+        xlabel(ax(n+2),'Cluster Order')
+        ax(n+2).XTick=4:max(8,ceil((ax(n+2).XLim(2)-4)/20)*2):2000;
+
+        prefix="";
+        if numel(pD)>1
+            prefix=pD(i).FileName; 
+        end
+        fnm=prefix+"Cluster_VR_"+strain+".png";
+        saveas(f(n+1),fullfile(path,fnm));
+        fnm=prefix+"Cluster_Z_"+strain+".png";
+        saveas(f(n+2),fullfile(path,fnm));
+    end
 
 end
 
-%plot save
-if tit;title(ax(1),"Void Ratio per Order");end
-ylabel(ax(1),'Void Ratio')
-xlabel(ax(1),'Cluster Order')
-if max(order)>200
-    L=ax(1).XLim;
-    ax(1).XLim=[0,200];
-    fnm="Cluster_VR_LowO.png";
-    saveas(f(1),fullfile(path,fnm));
-    ax(1).XLim=L;
-    %f(1).Position(3)=2*f(1).Position(3);
-end
-fnm="Cluster_VR.png";
-saveas(f(1),fullfile(path,fnm));
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PLOT SURFACE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-if tit;title(ax(2),"Coordination per Order");end
-ylabel(ax(2),'Coordination')
-xlabel(ax(2),'Cluster Order')
-if max(order)>200
-    L=ax(2).XLim;
-    ax(2).XLim=[0,200];
-    fnm="Cluster_Z_LowO.png";
-    saveas(f(2),fullfile(path,fnm));
-    ax(2).XLim=L;
-    %f(2).Position(3)=2*f(2).Position(3);
-end
-fnm="Cluster_Z.png";
-saveas(f(2),fullfile(path,fnm));
-
-%%%%%%%%%%% PLOT SURFACE %%%%%%%%%%%
-
-if size(pD,2)==1
-    Z=pD(1).Results.Mean(3:end,2:end,1); %VR data
-    Y=pD(1).Results.Mean(3:end,1,1);    %Order Data
+if numel(pD)==1
+    Z=pD(1).Results.Mean(3:end,2:end,1); %VR
+    Y=pD(1).Results.Mean(3:end,1,1);     %Order
     Y=Y*ones(1,size(Z,2));
     if strcmpi(x,'p')
         X=pD(1).Results.Pressure; %Evolution axis data
@@ -1980,33 +2291,37 @@ if size(pD,2)==1
     end
     X=ones(size(Z,1),1)*X';
     Z(Z==0)=NaN;
-    h=figure;
+    l=figure;
     surf(X,Y,Z);
-    xlabel(h.CurrentAxes,xlab)
-    ylabel(h.CurrentAxes,'Cluster Order')
-    zlabel(h.CurrentAxes,'Void Ratio')
+    xlabel(l.CurrentAxes,xlab)
+    ylabel(l.CurrentAxes,'Cluster Order')
+    zlabel(l.CurrentAxes,'Void Ratio')
     fnm="Surfaceplot.png";
-    h.CurrentAxes.YLim(2)=100;
-    saveas(h,fullfile(path,fnm));
+    l.CurrentAxes.YLim(2)=100;
+    saveas(l,fullfile(path,fnm));
 end
 
 
-%%%%%%%%%%% PLOT AVE VR EVOLUTION %%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%% PLOT AVE VR EVOLUTION %%%%%%%%%%%%%%%%%%%%%%%%%%
 if numel(pD)<8
     C=app.PlotColors;
 else
     C = graphClrCode(size(pD,2));%plot colorcode
 end
-path=MakePath(app,'LOOPVRCL');
-nb=8;
+if numel(pD)>1;nb=8;else;nb=2;end
+
 h(nb)=figure;axH(nb)=axes(h(nb));hold(axH(nb),'on');
 for i=1:(nb-1)
     h(i)=figure;axH(i)=axes(h(i));hold(axH(i),'on');
 end
-%plot cluster VR evolution in f of Ez
+%plot cluster VR evolution in f of Ez and p
 for i=1:size(pD,2)
-    optsP={'Color',C(i,:)};
-    optsE=optsP;
+    if numel(pD)>1
+        optsP={'Color',C(i,:)};
+        optsE=optsP;
+    else
+        optsP={};optsE={};
+    end
     for k=1:numel(pD(i).InfPts.q)
         optsP=[optsP,{'Pointx',pD(i).InfPts.p(k)}]; %#ok<AGROW>
         optsE=[optsE,{'Pointx',pD(i).InfPts.ez(k)}]; %#ok<AGROW>
@@ -2019,27 +2334,55 @@ for i=1:size(pD,2)
     %play so the mean must be recalculated/
     VRmn=pD(i).Results.Mean(:,:,1);
     VRZ=pD(i).Results.ClusterVRZ(:,1);
-    VR8=cellfun(@(X) mean(X(X(:,1)>6 & X(:,1)<21,2)),VRZ,'UniformOutput',true);
-    VR22=cellfun(@(X) mean(X(X(:,1)>20,2)),VRZ,'UniformOutput',true);
+    try VRtot=pD(i).Results.TotalVR;
+    catch
+        boolbg=0;
+    end
     %plot values removing 0s (no cluster in that pt)
         %small category
     ct=VRmn(VRmn(:,1)==4,2:end,1);
     z=~(ct==0);
-    plotMark(app,axH(1),xAxp(z),ct(z),optsP{:});
-    plotMark(app,axH(2),xAxE(z),ct(z),optsE{:});
+    vrP=1;vrE=2;
+    plotMark(app,axH(vrP),xAxp(z),ct(z),optsP{:});
+    plotMark(app,axH(vrE),xAxE(z),ct(z),optsE{:});
+    if boolbg && numel(pD)>1
+        plotMark(app,axH(vrP),xAxp(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+        plotMark(app,axH(vrE),xAxE(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+    end
         %submedium ctegory
     ct=VRmn(VRmn(:,1)==6,2:end,1);
     z=~(ct==0);
-    plotMark(app,axH(3),xAxp(z),ct(z),optsP{:});
-    plotMark(app,axH(4),xAxE(z),ct(z),optsE{:});
+    if numel(pD)>1;vrP=vrP+2;vrE=vrE+2;end
+    plotMark(app,axH(vrP),xAxp(z),ct(z),optsP{:});
+    plotMark(app,axH(vrE),xAxE(z),ct(z),optsE{:});
+    if boolbg && numel(pD)>1
+        plotMark(app,axH(vrP),xAxp(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+        plotMark(app,axH(vrE),xAxE(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+    end
         %medium ctegory
+    VR8=cellfun(@(X) mean(X(X(:,1)>6 & X(:,1)<21,2)),VRZ,'UniformOutput',true);
     z=~(VR8==0);
-    plotMark(app,axH(5),xAxp(z),VR8(z),optsP{:});
-    plotMark(app,axH(6),xAxE(z),VR8(z),optsE{:});
+    if numel(pD)>1;vrP=vrP+2;vrE=vrE+2;end
+    plotMark(app,axH(vrP),xAxp(z),VR8(z),optsP{:});
+    plotMark(app,axH(vrE),xAxE(z),VR8(z),optsE{:});
+    if boolbg && numel(pD)>1
+        plotMark(app,axH(vrP),xAxp(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+        plotMark(app,axH(vrE),xAxE(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+    end
         %large ctegory
+    VR22=cellfun(@(X) mean(X(X(:,1)>20,2)),VRZ,'UniformOutput',true);
     z=~(VR22==0);
-    plotMark(app,axH(7),xAxp(z),VR22(z),optsP{:});
-    plotMark(app,axH(8),xAxE(z),VR22(z),optsE{:});
+    if numel(pD)>1;vrP=vrP+2;vrE=vrE+2;end
+    plotMark(app,axH(vrP),xAxp(z),VR22(z),optsP{:});
+    plotMark(app,axH(vrE),xAxE(z),VR22(z),optsE{:});
+    if boolbg && numel(pD)>1
+        plotMark(app,axH(vrP),xAxp(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+        plotMark(app,axH(vrE),xAxE(z),VRtot(z),'Color',C(i,:),'Background','Nolegend');
+    elseif boolbg
+        plotMark(app,axH(1),xAxp(z),VRtot(z),'Background');
+        plotMark(app,axH(2),xAxE(z),VRtot(z),'Background');
+    end
+
 end
 
 %Add legends or create legend file
@@ -2063,97 +2406,121 @@ if size(pD,2)>1
         % Put the figure back in the middle screen area
         set(o, 'Position', get(o,'Position') + [500, 400, 0, 0]);
         saveas(o,fullfile(path,"Legend.png"));
-
+        
         %Delete extra figures
         delete(o);
     end
+    yl=cat(1,axH.YLim);
+    yl=[min(yl(:,1)) ,max(yl(:,2))];
+    
+    j=1;
+    %Small VR = f(p)
+    if tit;title(axH(j),"Average small cluster Void Ratio");end
+    axH(j).XLim(1)=0;
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Mean pressure (kPA)')
+    fnm="VR_Small_P.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Small VR = f(E)
+    if tit;title(axH(j),"Average small cluster Void Ratio");end
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Axial Strain')
+    fnm="VR_Small_E.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Submed VR = f(p)
+    if tit;title(axH(j),"Average submedium cluster Void Ratio");end
+    axH(j).XLim(1)=0;
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Mean pressure (kPA)')
+    fnm="VR_Submedium_P.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Submed VR = f(E)
+    if tit;title(axH(j),"Average submedium cluster Void Ratio");end
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Axial Strain')
+    fnm="VR_Submedium_E.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Med VR = f(p)
+    if tit;title(axH(j),"Average medium cluster Void Ratio");end
+    axH(j).XLim(1)=0;
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Mean pressure (kPA)')
+    fnm="VR_Medium_P.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Med VR = f(E)
+    if tit;title(axH(j),"Average medium cluster Void Ratio");end
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Axial Strain')
+    fnm="VR_Medium_E.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Larg VR = f(p)
+    if tit;title(axH(j),"Large cluster Void Ratio");end
+    axH(j).XLim(1)=0;
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Mean pressure (kPA)')
+    fnm="VR_Large_P.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %Larg VR = f(E)
+    if tit;title(axH(j),"Large cluster Void Ratio");end
+    axH(j).YLim=yl;
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Axial Strain')
+    fnm="VR_Large_E.png";
+    saveas(h(j),fullfile(path,fnm));
+    
+else
+     if leg
+        legend(axH(1),"Small","Submedium","Medium","Large","Specimen",'location','best')
+        legend(axH(2),"Small","Submedium","Medium","Large","Specimen",'location','best')
+     end
+    j=1;
+    %cat VR = f(p)
+    if tit;title(axH(j),"Average cluster Void Ratio");end
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Mean pressure (kPA)')
+    fnm="VR_Small_P.png";
+    saveas(h(j),fullfile(path,fnm));
+    j=j+1;
+    
+    %cat VR = f(E)
+    if tit;title(axH(j),"Average cluster Void Ratio");end
+    ylabel(axH(j),'Void Ratio')
+    xlabel(axH(j),'Axial Strain')
+    fnm="VR_Small_E.png";
+    saveas(h(j),fullfile(path,fnm));
 end
 
-yl=cat(1,axH.YLim);
-yl=[min(yl(:,1)) ,max(yl(:,2))];
-
-j=1;
-%Small VR = f(p)
-if tit;title(axH(j),"Average small cluster Void Ratio");end
-axH(j).XLim(1)=0;
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Mean pressure (kPA)')
-fnm="VR_Small_P.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Small VR = f(E)
-if tit;title(axH(j),"Average small cluster Void Ratio");end
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Axial Strain')
-fnm="VR_Small_E.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Submed VR = f(p)
-if tit;title(axH(j),"Average submedium cluster Void Ratio");end
-axH(j).XLim(1)=0;
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Mean pressure (kPA)')
-fnm="VR_Submedium_P.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Submed VR = f(E)
-if tit;title(axH(j),"Average submedium cluster Void Ratio");end
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Axial Strain')
-fnm="VR_Submedium_E.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Med VR = f(p)
-if tit;title(axH(j),"Average medium cluster Void Ratio");end
-axH(j).XLim(1)=0;
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Mean pressure (kPA)')
-fnm="VR_Medium_P.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Med VR = f(E)
-if tit;title(axH(j),"Average medium cluster Void Ratio");end
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Axial Strain')
-fnm="VR_Medium_E.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Larg VR = f(p)
-if tit;title(axH(j),"Large cluster Void Ratio");end
-axH(j).XLim(1)=0;
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Mean pressure (kPA)')
-fnm="VR_Large_P.png";
-saveas(h(j),fullfile(path,fnm));
-j=j+1;
-
-%Larg VR = f(E)
-if tit;title(axH(j),"Large cluster Void Ratio");end
-axH(j).YLim=yl;
-ylabel(axH(j),'Void Ratio')
-xlabel(axH(j),'Axial Strain')
-fnm="VR_Large_E.png";
-saveas(h(j),fullfile(path,fnm));
-
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%% VR per Cl order %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Plot VR of the demanded Cluster's orders
 lp='';%4:2:20;
 if ~isempty(lp)
-    C=app.PlotColors;
     nb=numel(lp);
+    if nb<8
+        C = app.PlotColors;
+    else
+        C = graphClrCode(nb);%plot colorcode
+    end
     path=MakePath(app,'LOOPVRCL');
     g(nb)=figure;axG(nb)=axes(g(nb));hold(axG(nb),'on');
     for i=1:(nb-1)
@@ -2222,9 +2589,11 @@ if ~isempty(lp)
 end
 
 if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,app.ExeAllButton)
-    delete(f);
+    delete([f,h]);
     if~isempty(lp);delete(g);end
-    if size(pD,2)==1;delete(h);end
+    if numel(pD)==1;delete(l);end
+elseif numel(pD)>2
+    delete(f);
 % else
 %     ax(3).XLim(2)=l1;
 %     ax(4).XLim(2)=l2;
@@ -2249,6 +2618,7 @@ if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
 
 C=app.PlotColors;
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 nb=3;
 f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
 for i=1:(nb-1)
@@ -2275,9 +2645,9 @@ for i=1:2
     plot(ax(i+1),strain,str(:,4),lType,'Color',C(4,:))
 end
 if leg
-    legend(ax(2),"Order 4","Order 6","Order 8-20","Order 22+",...
+    legend(ax(2),"Small","Submedium","Medium","Large",...
         'location','best')
-    legend(ax(3),"Order 6","Order 8-20","Order 22+",...
+    legend(ax(3),"Submedium","Medium","Large",...
         'location','best')
 end
 %titles
@@ -2310,7 +2680,7 @@ end
 end
 function clTransfPlotter(pD,app)
 %CLSTRPLOTTER plot the evolution the Cl4 and Cl6 transformations
-
+% start it
 if app.SimType==3
    xlab='Mean pressure (kPA)';
 else
@@ -2318,7 +2688,9 @@ else
 end
 
 %matlab default colors to mantain every class in the same clor
-C=app.PlotColors;
+C = app.PlotColors;
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
+
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
@@ -2409,7 +2781,7 @@ for k=1:numel(pD.InfPts.q)
 end
 
 i=1;
-%% PLOTGROUP 1 transformatio ratio
+%%%%%%%%%%%%%%%% PLOTGROUP 1 transformatio ratio %%%%%%%%%%%%%%%%
 %Cl4 => others  & others => Cl4 - - ratio
 ax(i,1)=nexttile(tf(i));hold(ax(i,1),'on');
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,1,1)./nbCll(:,1),'Color',C(2,:),opts{:});
@@ -2452,7 +2824,7 @@ plotMark(app,ax(i,2),ctRes.Strain,cl(:,3,2)./nbCll(:,4),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,2),ctRes.Strain,cl(:,3,3)./nbCll(:,4),'Color',C(3,:),opts{:});
 i=i+1;
 
-%% PLOTGROUP 2 transformation per nb
+%%%%%%%%%%%%%%%% PLOTGROUP 2 transformation per nb %%%%%%%%%%%%%%%%
 %Cl4 => others  & others => Cl4 - - nb
 ax(i,1)=nexttile(tf(i));hold(ax(i,1),'on');
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,1,1),'Color',C(2,:),opts{:});
@@ -2498,7 +2870,7 @@ plotMark(app,ax(i,2),ctRes.Strain,cl(:,3,2),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,2),ctRes.Strain,cl(:,3,3),'Color',C(3,:),opts{:});
 i=i+1;
 
-%% PLOTGROUP 3 - High p strain vaules
+%%%%%%%%%%%%%%%% PLOTGROUP 3 - High p strain vaules %%%%%%%%%%%%%%%%
 %Cl4 => others  & others => Cl4 - - nb
 ax(i,1)=nexttile(tf(i));hold(ax(i,1),'on');
 plotMark(app,ax(i,1),ctRes.Strain,clpStn(:,1,1),'Color',C(2,:),opts{:});
@@ -2541,7 +2913,7 @@ plotMark(app,ax(i,2),ctRes.Strain,clpStn(:,3,2),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,2),ctRes.Strain,clpStn(:,3,3),'Color',C(3,:),opts{:});
 i=i+1;
 
-%% PLOTGROUP 4 - High q strain vaules
+%%%%%%%%%%%%%%%% PLOTGROUP 4 - High q strain vaules %%%%%%%%%%%%%%%%
 %Cl4 => others  & others => Cl4 - - nb
 ax(i,1)=nexttile(tf(i));hold(ax(i,1),'on');
 plotMark(app,ax(i,1),ctRes.Strain,clqStn(:,1,1),'Color',C(2,:),opts{:});
@@ -2584,7 +2956,7 @@ plotMark(app,ax(i,2),ctRes.Strain,clqStn(:,3,2),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,2),ctRes.Strain,clqStn(:,3,3),'Color',C(3,:),opts{:});
 i=i+1;
 
-%% PLOTGROUP 5 - Delta values
+%%%%%%%%%%%%%%%% PLOTGROUP 5 - Delta values %%%%%%%%%%%%%%%%
 ord=ctRes.NbCell(3:end,2:end);
 ord=ord(:,2:end)-ord(:,1:end-1);
 %Delta Cl4
@@ -2607,7 +2979,7 @@ plotMark(app,ax(i,1),ctRes.Strain,(sum(cl(:,3,1:3),3)...
     -sum(cl(:,1:3,4),2)),'Color',C(1,:),opts{:});
 plotMark(app,ax(i,1),ctRes.Strain,[0 sum(ord(10:end,:),1)],'Color',C(2,:),opts{:});
 i=i+1;
-%% PLOTGROUP 6 
+%%%%%%%%%%%%%%%% PLOTGROUP 6  %%%%%%%%%%%%%%%%
 % (others => Cl4) -(Cl4 => others)
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,1,2)-cl(:,1,1),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,1,3)-cl(:,2,1),'Color',C(3,:),opts{:});
@@ -2628,7 +3000,7 @@ plotMark(app,ax(i,1),ctRes.Strain,cl(:,3,1)-cl(:,1,4),'Color',C(1,:),opts{:});
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,3,2)-cl(:,2,4),'Color',C(2,:),opts{:});
 plotMark(app,ax(i,1),ctRes.Strain,cl(:,3,3)-cl(:,3,4),'Color',C(3,:),opts{:});
 
-%% Titles and stuff
+%%%%%%%%%%%%%%%% Titles and stuff %%%%%%%%%%%%%%%%
 legs={["Cl6","Cl8-20","Cl22+"];
     ["Cl4","Cl8-20","Cl22+"];
     ["Cl4","Cl6","Cl22+"];
@@ -2676,6 +3048,8 @@ fnm=["Transf_Base_O4";"Transf_Base_O6";
     "Transf_Curb_O8";"Transf_Curb_O22";
     "Transf_Tot_O4";"Transf_Tot_O6";
     "Transf_Tot_O8";"Transf_Tot_O22"];
+
+%%%%%%%%%%%%%%%% Save files %%%%%%%%%%%%%%%%
 for i=1:nb
     %Add legend in the for the tiledlayouts only
     if leg
@@ -2728,7 +3102,7 @@ end
 %support functions
 function cl=clIdentifier(sc)
 %CLIDENTIFIER identify ot which cluster each cell belongs to
-% Function used on cluster deformation calculation. For Cluster identified,
+% Function used on cluster transformaiton calculation. For Cluster identified,
 % the cell it is formed from will be identified. Thus an object containing
 % 3 lists of cell IDs will be returned with which cluster each cell belongs
 % to. This object will have 3 properties with diferent cluster categories
@@ -2743,6 +3117,7 @@ cl.cl6Id=sort(cat(2,sc.Loops(cl6).Grains),1)';%matrix of cl6 grainsIds
 c6c=cell(numel(cl6),1);             %cl6 cells
 [c6c{:}]=deal(sc.Loops(cl6).sCells);
 cl.cl6cells=c6c;                    %cell array containing cl6 cells
+
 cl.cl6=cl6; %cl6 Clusters Ids
 
 %do the same for the others
@@ -2763,7 +3138,54 @@ cl.cl8=cl8;             %cl8 cluster Ids
 cl.srtDT=DT;            %Delaunay triangulation
 
 end
+function [X,Y,map]=pointDensity(XY,dX,dY)
+%POINTDENSITY calculate a density map centered arround points XY
+% - XY is a Nx2 matrix containign the data
+% - dX is the interval between each point of the first column of XY
+% - dY is interval between each point of the second column of XY
+% Returns the necessary values to plot the point density surface using the
+% following commands :
+%   surface(X,Y,map)
+%   colormap(flip(autumn))
 
+%Find out minimum and maximum values of XY and create two vectors following
+%the demanded interval
+mx=max(XY,[],1);
+mn=min(XY,[],1);
+X=mn(1):dX:mx(1)+dX;
+Y=mn(2):dY:mx(2)+dY;
+
+% Create the map by checking the number of points inside each rectangular
+% of size dX dY centered at X,Y
+map=NaN(numel(Y),numel(X));
+for i=1:(numel(X)-1)
+    %check X
+    chk=XY(:,1)>(X(i)-dX/2) & XY(:,1)<=(X(i)+dX/2);
+    for j=1:(numel(Y)-1)
+        %check Y
+        v=sum(XY(chk,2)>(Y(j)-dY/2) & XY(chk,2)<=(Y(j)+dY/2));
+        if v>0
+            %add a 0 to surrounding positions to validate 
+            map(j:j+1,i:i+1)=0; 
+            map(j,i)=v;
+        end 
+        %if there is no other point above the check, stop checking
+        if sum(XY(chk,2)>(Y(j)-dY/2))==0;break;end
+    end
+end
+
+%divide the map by the maximum of each column to obtain a 0 to 1 scale per
+%X value. Check for NaN values before and after to be sure they are not
+%changed. The 0s are necessary to plot the graph correclty
+chk=isnan(map); %save previous NaN positions
+map=map./(ones(numel(Y),1)*max(map,[],1));
+map(logical(isnan(map)-chk))=0; %if any other NaN is created turn into 0
+
+%remove a half interval from each to center each square around X and Y
+%values.
+X=X-dX/2;
+Y=Y-dY/2;
+end
 %{
 function [grid,x,y]=distGraph(data,C1,C2,C3,C4,type)
 %DISTGRAPH creates a point density graph to be plot
@@ -2874,5 +3296,114 @@ oPos=[pct(oPos-1);pct(oPos)];      % values of pos-1 and pos
 %return order located in pos or pos-1 depending where the value is closest.
 prc=O(li-(oPos-2));
 end
+%}
+%{
+OLD VR SCATTER ALL DATA
+for j=1:nb
+    % FIRST SCATTER j=1 => VR
+    % SECOND SCATTER j=1 => Z
+    VRZ=double.empty(0,2);   %[Ord VR Z]
+    VRZ4=double.empty(0,2);  %[Ord VR Z]
+    order=NaN(5000,size(pD,2));   %Ord x numel(pD)
+    minVRZ=NaN(5000,size(pD,2));   %min x numel(pD)
+    maxVRZ=NaN(5000,size(pD,2));   %max x numel(pD)
+    aveVRZ=zeros(5000,size(pD,2)); %mean x numel(pD)
+    nbrVRZ=zeros(5000,size(pD,2)); %nb x numel(pD)
+    % all points plot
+    for i=1:size(pD,2)
+        vrz=cat(1,pD(i).Results.ClusterVRZ{:,1});
+        if j==2;vrz4=cat(1,pD(i).Results.ClusterVRZ{:,2});end
+        mx= groupsummary(vrz(:,j+1), vrz(:,1), 'max');
+        mn= groupsummary(vrz(:,j+1), vrz(:,1), 'min');
+        [av,od,nb]= groupsummary(vrz(:,j+1), vrz(:,1), 'mean');
+        order(od/2,i)=od;
+        minVRZ(od/2,i)=mn;
+        maxVRZ(od/2,i)=mx;
+        aveVRZ(od/2,i)=av;
+        nbrVRZ(od/2,i)=nb;
+        VRZ=unique([VRZ;vrz(:,[1,j+1])],'rows');
+        if j==2;VRZ4=unique([VRZ4;vrz4(:,[1,j+1])],'rows');end
+    end
+    if j==2
+        %do not add the VR data to 
+        VRZ=[VRZ;VRZ4]; %#ok<AGROW>
+    end
+    
+    %Transform mmm into a column vector removing exces values (second dim)
+    if numel(pD)>1
+        order=max(order,[],2);
+        minVRZ=min(minVRZ,[],2);
+        maxVRZ=max(maxVRZ,[],2);
+        aveVRZ=sum(aveVRZ.*nbrVRZ,2)./sum(nbrVRZ,2); 
+    end
+    
+    %remove exces lines from mmm (full 0 lines)
+    order=order(order>0);
+    minVRZ=minVRZ(order/2,:);maxVRZ=maxVRZ(order/2,:);
+    aveVRZ=aveVRZ(order/2,:);
+    %plot
+    scatter(ax(j),VRZ(:,1),VRZ(:,2),'x','MarkerEdgeColor',[0.6 0.6 0.6]) %scatter all pts
+    plot(ax(j),order(aveVRZ>0),aveVRZ(aveVRZ>0),"k"+lType,'LineWidth',lw)   %plot mean line
+
+    %check for places where there is no dif between vals and average for a mean
+    %value to be calculated with values around it
+    chk=find((aveVRZ-minVRZ)./aveVRZ<=0.01 | (maxVRZ-aveVRZ)./aveVRZ<=0.01);
+    m=minVRZ;mx=maxVRZ;
+    for l=1:numel(chk)
+        if chk(l)<=3
+            m(chk(l))=min(minVRZ(1:7));
+            mx(chk(l))=max(maxVRZ(1:7));
+        elseif chk(l)>=(numel(minVRZ)-20)
+            m(chk(l))=min(minVRZ(end-20:end));
+            mx(chk(l))=max(maxVRZ(end-20:end));
+        else
+            m(chk(l))=min(minVRZ(chk(l)-10:chk(l)+10));
+            mx(chk(l))=max(maxVRZ(chk(l)-10:chk(l)+10));
+        end
+    end
+    minVRZ=m;maxVRZ=mx;
+    %modify them, fit values
+    ftmax=fit(order,maxVRZ,fittype({'log(x)','x','1'}));
+    ftmin=fit(order,minVRZ,fittype({'log(x)','x','1'}));
+    axes(ax(j))
+    p=plot(ftmax,'-b',order,maxVRZ); %plot max line
+    p(2).LineWidth=lw;
+    p=plot(ftmin,'-b',order,minVRZ); %plot min line
+    p(2).LineWidth=lw;
+    %remove the generated pts
+    delete(ax(j).Children([2,4])) %remove points
+    %remove the autogenerated legends
+    hLeg=findobj(f(j),'type','legend');
+    set(hLeg,'visible','off')
+
+end
+%plot save
+if tit;title(ax(1),"Void Ratio per Order");end
+ylabel(ax(1),'Void Ratio')
+xlabel(ax(1),'Cluster Order')
+if max(order)>200
+    L=ax(1).XLim;
+    ax(1).XLim=[0,200];
+    fnm="Cluster_VR_LowO.png";
+    saveas(f(1),fullfile(path,fnm));
+    ax(1).XLim=L;
+    %f(1).Position(3)=2*f(1).Position(3);
+end
+fnm="Cluster_VR.png";
+saveas(f(1),fullfile(path,fnm));
+
+if tit;title(ax(2),"Coordination per Order");end
+ylabel(ax(2),'Coordination')
+xlabel(ax(2),'Cluster Order')
+if max(order)>200
+    L=ax(2).XLim;
+    ax(2).XLim=[0,200];
+    fnm="Cluster_Z_LowO.png";
+    saveas(f(2),fullfile(path,fnm));
+    ax(2).XLim=L;
+    %f(2).Position(3)=2*f(2).Position(3);
+end
+fnm="Cluster_Z.png";
+saveas(f(2),fullfile(path,fnm));
 %}
 

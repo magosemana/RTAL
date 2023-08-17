@@ -14,6 +14,7 @@ classdef grains
         PGStressTensor  %Per grain stress tensor    - 3x3xN matrix
         
         %Properties calculated through this funciton
+        AveCluster      %grain's average cluster category from [1:4] - Nx2 matrix
         ContactsDir     %grain's contacts number, total vert and horiz. Nbgrainsx3 matrix
         ContactFNormals %grain's contact normals calculated with the force vectors
         FabricTensor    %model's fabric tensor, geometric and force - 3x3x2 matrix
@@ -382,6 +383,35 @@ classdef grains
             %Save files
             gr.Z=mean(GrCnbr);
             gr.ContactNubr=GrCnbr;
+        end
+        function gr = aveCluster(gr,sc)
+            %AVECLUSTER return the ave cluster per grain
+            gC=sc.GoodCells;
+            if isempty(gC)
+                gC = goodCell(sc);
+            end
+            %Get clusters cells
+            cC=cat(2,sc.Loops.sCells)';
+            %Transform them into goodcell Ids
+            [~,cC]=ismember(cC,gC);
+            %add cluster order to it
+            clCe=[cC repelem(cat(1,sc.Loops.Order),cat(1,sc.Loops.nbCells),1)];
+            %get a list grain forming good cells only from DT
+            gcDT=sc.DelaunayT(gC,:);
+            aveCl=zeros(numel(gr.ID),1);
+            for i=1:numel(gr.ID) 
+                %get good cells belonging to grain i
+                grCl=find(sum(gcDT==i,2)==1);
+                %mathc it with clCe vector
+                [mnb,pos]=ismember(grCl,clCe(:,1));
+                %calculate average
+                if sum(mnb)>1
+                    aveCl(i)=( sum(~mnb)*4 + sum(clCe(pos(mnb),2)) )/numel(mnb);
+                else
+                    aveCl(i)=4;
+                end
+            end
+            gr.AveCluster=aveCl;
         end
         function gr = purge(gr)
             %PURGE remove excess values from grain object for saving

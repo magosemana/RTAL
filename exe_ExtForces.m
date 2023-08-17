@@ -30,7 +30,7 @@ else
     if steps(end)~=N2; steps=[steps;N2];end
 end
 snExt = extStrains(TD,steps,N1,app,'dev');
-ssExt = extStress(TD,steps,app);
+ssExt = extStress(TD,steps,app,'separatePist');
 consoStrain = extStrains(TD,app.ConsoStep,N1,app);
 %calculate inertial term
 gr=grains('BASIC',N1,'',app);
@@ -83,10 +83,19 @@ else
     end
 end
 fnm=fullfile(fPath,'Drained_M_Values.txt');
-if isfile(fnm) || (max([pD.SimType])~=1)
+if isfile(fnm) && (max([pD.SimType])~=1)
     opts = detectImportOptions(fnm);
+    opts.Delimiter='|';
+    opts.VariableNamesLine = 3;
+    opts.DataLines=[4 Inf];
     tab = readtable(fnm,opts);
-    tab=tab{:,:};
+    tab=tab{:,1:2};
+    %fuck matlab file reading funcitons
+    if iscell(tab)
+        if ischar(tab{1,1})
+            tab=cellfun(@str2num, tab);
+        end
+    end
     pD(1).Results.SlopeM=tab;
 end
 pD(1).Prefix='Load';
@@ -101,6 +110,23 @@ sigma=(char(963));
 epsilon=(char(949));
 %delta=(char(916));
 
+%check all pD have the same amount of columns (9 3D, 6 2D)
+nC=size(pD(1).Results.Stress,2);
+for i=2:numel(pD)
+    if size(pD(i).Results.Stress,2)~=nC
+        warndlg("Loaded files do not have the same amount of columns,"+...
+            "cannot compare 2D to 3D files.");
+        return
+    end
+end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
+
+%variable to know the correct column of data
+if nC==9
+    clmnP=5;
+else
+    clmnP=4;
+end
 
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
@@ -116,18 +142,19 @@ pathB=MakePath(app,'FORCEXT');
 png=".png";
 
 %Base number of plots
-nb=14;
+nb=15;
 %If we are in 2D the unit of the stress should be kPa/m not kPa
-if size(pD(1).Results.Stress,2)>4
+if size(pD(1).Results.Stress,2)>6
     unit='[kPa]';
 else
     unit='[kPa/m]';nb=nb-1;
 end
 
 %Create Figures and Axis
-if numel(pD)>1;nb=nb-4;end
-iPre=0;%interstitial pressure
-for i=1:numel(pD);if pD(i).SimType==2;iPre=1;end;end
+if numel(pD)>1;nb=nb-5;end
+%Add interstitial pressure calculation if all are undrained
+iPre=1;
+for i=1:numel(pD);if pD(i).SimType~=2;iPre=0;end;end
 nb=nb+iPre;
 f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
 for i=1:(nb-1)
@@ -144,7 +171,11 @@ else
 end
 
 %matlab base graph colors
-C=app.PlotColors;
+if numel(pD)<8
+    C = app.PlotColors;
+else
+    C = graphClrCode(size(pD,2));%plot colorcode
+end
 %create vectors to store value for Mslope calculations
 Mvals=zeros(numel(pD),2,2); 
 for j=1:numel(pD)
@@ -156,34 +187,24 @@ for j=1:numel(pD)
     %Stress : [sigX,sigY,sigZ,q,p]  Strain : [Ex,Ey,Ez,Ev,Ed]
     Res=pD(j).Results;i=1;
     %q=f(Ez)
-    plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,end-1),...
+    plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,clmnP-1),...
         'Color',C(j,:),vez{:});i=i+1;
     %graph p=f(Ez)
-    plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,end),...
+    plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,clmnP),...
         'Color',C(j,:),vez{:});i=i+1;
     %graph q=f(p) + Slope M
-    plotMark(app,ax(i),Res.Stress(:,end),Res.Stress(:,end-1),...
+    plotMark(app,ax(i),Res.Stress(:,clmnP),Res.Stress(:,clmnP-1),...
         'Color',C(j,:),vp{:});
         %M_CSL - Simtype 1 and 3
     %add slope M that connects the origin to the steady state marked by
     %the last point on the graph
-    Mvals(j,:,1)=[Res.Stress(end,end-1),Res.Stress(end,end)];%[q,p]
+    Mvals(j,:,1)=[Res.Stress(end,clmnP-1),Res.Stress(end,clmnP)];%[q,p]
         %M_PEAK - All
     %add slope M that connects the origin to the failure point marked by
-    %the max deviatoric stress
-    [mxQ,mxPos]=max(Res.Stress(:,end-1));
-    if pD(j).SimType==3
-        %on Qcst we have to find the point of rupture. It will be
-        %defined as the first point to reach less then 99% of Q after
-        %the consolidation
-        mxPos=find((Res.Stress(mxPos:end,end-1)/mxQ)<0.99,1)+mxPos;
-    elseif pD(j).SimType==2
-        %In the case of undrained, the M_peak is the value of the maximal
-        %Q/P atteined
-        [~,mxPos]=max(Res.Stress(:,end-1)./Res.Stress(:,end));
-    end
+    %the max q/p
+    [~,mxPos]=max(Res.Stress(:,clmnP-1)./Res.Stress(:,clmnP));
         
-    Mvals(j,:,2)=[Res.Stress(mxPos,end-1),Res.Stress(mxPos,end)];%[q,p]
+    Mvals(j,:,2)=[Res.Stress(mxPos,clmnP-1),Res.Stress(mxPos,clmnP)];%[q,p]
     if j==numel(pD)
         ly=ax(i).YLim(2);lx=ax(i).XLim(2);
         %CRITICAL STATE line
@@ -227,49 +248,61 @@ for j=1:numel(pD)
     
     %graph q/p=f(Ez)
     plotMark(app,ax(i),Res.Strain(:,end-2),...
-        Res.Stress(:,end-1)./Res.Stress(:,end),'Color',C(j,:),vez{:});i=i+1;
+        Res.Stress(:,clmnP-1)./Res.Stress(:,clmnP),'Color',C(j,:),vez{:});i=i+1;
     %graph Ev=f(Ez)
     plotMark(app,ax(i),Res.Strain(:,end-2),Res.Strain(:,end-1),...
         'Color',C(j,:),vez{:});i=i+1;
     %graph Ev=f(p)
-    plotMark(app,ax(i),Res.Stress(:,end),Res.Strain(:,end-1),...
+    plotMark(app,ax(i),Res.Stress(:,clmnP),Res.Strain(:,end-1),...
         'Color',C(j,:),vp{:});i=i+1;
     %graph Ev=f(Ed)
     plotMark(app,ax(i),Res.Strain(:,end),Res.Strain(:,end-1),...
         'Color',C(j,:),vp{:});i=i+1;
-    %graph E=f(Ez)
+    %graph Ed=f(Ez)
     plotMark(app,ax(i),Res.Strain(:,end-2),Res.Strain(:,end),...
         'Color',C(j,:),vez{:});i=i+1;
 
     %Second order work calculation
     stn=Res.Strain(2:end,1:end-2)-Res.Strain(1:end-1,1:end-2);
-    sts=Res.Stress(2:end,1:end-2)-Res.Stress(1:end-1,1:end-2);
+    sts=Res.Stress(2:end,1:clmnP-2)-Res.Stress(1:end-1,1:clmnP-2);
     dW2=[0;sum(stn.*sts,2)];
+    %normalized W2 if wanted
+    %dW2=[0;sum(stn.*sts,2)./(sqrt(sum(sts.^2,2)).*sqrt(sum(stn.^2,2)))];
     plotMark(app,ax(i),Res.Strain(:,end-2),dW2,...
         'Color',C(j,:),vez{:});i=i+1;
     %stop here for multiload
     if numel(pD)==1
         %graph sigZ =f(Ez)
-        plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,end-2),...
+        plotMark(app,ax(i),Res.Strain(:,end-2),Res.Stress(:,clmnP-2),...
             'Color',C(j,:),vez{:});i=i+1;
         %graph sigY1 & sigY2 =f(EZ)
-        plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-3));
-        plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-3),'+');
+        plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end),'LineWidth',1.5);
+        plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-1),'+','LineWidth',1.5);
         i=i+1;
-        if size(Res.Stress,2)>4
+        if size(Res.Stress,2)>6
             %graph sigX1 & sigX2 =f(EZ)
-            plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-4));
-            plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-4),'+');
+            plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-2),'LineWidth',1.5);
+            plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,end-3),'+','LineWidth',1.5);
             i=i+1;
             %graph(Ez and -Ex-Ey)
-            plot(ax(i),Res.Strain(:,end-2),Res.Strain(:,end-2),'Marker','|');
-            plot(ax(i),Res.Strain(:,end-2),-sum(Res.Strain(:,end-4:end-3),2),'+');
+            plot(ax(i),Res.Strain(:,end-2),Res.Strain(:,end-2),'LineWidth',1.5);
+            plot(ax(i),Res.Strain(:,end-2),-sum(Res.Strain(:,end-4:end-3),2),'LineWidth',1.5);
+            i=i+1;
+            %plot sigX sigY and sigZ in a graph
+            plot(ax(i),Res.Strain(:,end-2),Res.Stress(:,1),...
+                Res.Strain(:,end-2),Res.Stress(:,2),...
+                Res.Strain(:,end-2),Res.Stress(:,3),'LineWidth',1.5);
+        else
+            %plot sigX sigY and sigZ in a graph
+            plot(ax(end),Res.Strain(:,end-2),Res.Stress(:,1),...
+                Res.Strain(:,end-2),Res.Stress(:,2),'LineWidth',1.5);
         end
+        
         i=i+1;
     end
     
     %interts pressure
-    if pD(j).SimType==2
+    if iPre
         row=(Res.Step==round(pD(j).ConsoTime/pD(j).TimeStep));
         consP=Res.Stress(row,end);consQ= Res.Stress(row,end-1);
         newQ=consQ+3*(Res.Stress(:,end)-consP);
@@ -302,10 +335,10 @@ if leg && numel(pD)>1
     switch pD(j).SimType
         case 1
             legloc=["northeast","northeast","southeast","southeast","southeast",...
-                "northeast","northeast","southeast","northeast","northwest"];
+                "northeast","northeast","southeast","northeast","southeast"];
         case 2
             legloc=["southeast","southeast","southeast","southeast","northwest",...
-                "northwest","northwest","southeast","southeast","southeast","northwest"];
+                "northwest","northwest","southeast","southeast","southeast","southeast"];
         case 3
             legloc=["southeast","northeast","southeast","southeast","southeast",...
                 "northeast","northeast","southeast","northeast","southeast"];
@@ -319,7 +352,7 @@ end
 i=1;
 %q=f(Ez)
 if tit; title(ax(i),['q=f(' epsilon 'z)']);end
-ylabel(ax(i),['Deviatoric stress ' unit])
+ylabel(ax(i),['Deviatoric stress (q) ' unit])
 xlabel(ax(i),'Axial Strain');
 filename="Stress_q";
 saveas(f(i),fullfile(path,filename+png));
@@ -327,7 +360,7 @@ i=i+1;
 
 %p=f(Ez)
 if tit; title(ax(i),['p=f(' epsilon 'z)']);end
-ylabel(ax(i),['Mean stress ' unit])
+ylabel(ax(i),['Mean stress (p) ' unit])
 xlabel(ax(i),'Axial Strain');
 ax(i).YLim(1)=0;
 filename="Stress_p";
@@ -337,8 +370,8 @@ i=i+1;
 
 %q=f(p) + Pente M rupture
 if tit; title(ax(i),'q=f(p)');end
-ylabel(ax(i),['Deviatoric stress ' unit])
-xlabel(ax(i),['Mean stress ' unit])
+ylabel(ax(i),['Deviatoric stress (q) ' unit])
+xlabel(ax(i),['Mean stress (p) ' unit])
 ax(i).XLim(1)=0;
 filename="Stress_q=f(p)";
 saveas(f(i),fullfile(path,filename+png));
@@ -346,7 +379,7 @@ i=i+1;
 
 %q/p=f(Ez) 
 if tit; title(ax(i),'q/p=f(Ez)');end
-ylabel(ax(i),'q/p')
+ylabel(ax(i),'Relative strength (q/p)')
 xlabel(ax(i),'Axial Strain')
 filename="Stress_qoverp";
 saveas(f(i),fullfile(path,filename+png));
@@ -370,7 +403,7 @@ set(get(get(yl,'Annotation'),'LegendInformation'),...
     'IconDisplayStyle','off');
 if tit; title(ax(i),[epsilon 'v=f(p)' ]);end
 ylabel(ax(i),'Volumetric Strain')
-xlabel(ax(i),['Mean stress ' unit]);
+xlabel(ax(i),['Mean stress (p) ' unit]);
 ax(i).YDir='reverse';
 ax(i).XLim(1)=0;
 filename="Strain_Volum_p";
@@ -428,7 +461,7 @@ if numel(pD)==1
     i=i+1;
 
     %sigX1 & sigX2 =f(Ez);
-    if app.checkPiston
+    if size(pD(1).Results.Stress,2)>6
         if tit; title(ax(i),[sigma 'X=f(' epsilon 'z)']);end
         ylabel(ax(i),[sigma 'X ' unit]);
         xlabel(ax(i),'Axial Strain');
@@ -446,7 +479,23 @@ if numel(pD)==1
     filename="DeformationCompare";
     saveas(f(i),fullfile(path,filename+png));
     i=i+1;
+
+    %sigX,sigY,sizZ=f(Ez)
+    if tit; title(ax(i),'Principal stress comparison');end
+    if size(pD(1).Results.Stress,2)>6
+        legend(ax(i),"Sigma X","Sigma Y","Sigma Z")
+    else
+        legend(ax(i),"Sigma Y","Sigma Z")
+    end
+    ylabel(ax(i),'Stress [MPa]')
+    xlabel(ax(i),'Axial Strain');
+    filename="Stress_Comp";
+    saveas(f(i),fullfile(path,filename+png));
+    i=i+1;
+
 end
+
+
 
 %u'= 3/1qtop -sig   - intert pressure
 if iPre
@@ -481,12 +530,12 @@ if pD(j).SimType==3 && numel(pD)==1
     
     %q=f(Ez)
     axf=nexttile(tf);
-    plotMark(app,axf,Res.Strain(:,end-2),Res.Stress(:,end-1),vez{:});
+    plotMark(app,axf,Res.Strain(:,end-2),Res.Stress(:,clmnP-1),vez{:});
     ylabel(axf,'Deviatoric Stress');
     xlabel(axf,'Axial Strain');
     %graph q=f(p)
     axf=nexttile(tf);
-    plotMark(app,axf,Res.Stress(:,end),Res.Stress(:,end-1),vp{:});
+    plotMark(app,axf,Res.Stress(:,clmnP),Res.Stress(:,clmnP-1),vp{:});
     ylabel(axf,'Deviatoric Stress');
     xlabel(axf,'Mean Stress');
     %jump a tile
@@ -500,7 +549,7 @@ if pD(j).SimType==3 && numel(pD)==1
     xlabel(axf,'Axial Strain');
     %graph Ev=f(p)
     axf=nexttile(tf);
-    plotMark(app,axf,Res.Stress(:,end),Res.Strain(:,end-1),vp{:});
+    plotMark(app,axf,Res.Stress(:,clmnP),Res.Strain(:,end-1),vp{:});
     axf.YDir='reverse';
     ylabel(axf,'Volumetric Strain');
     xlabel(axf,'Mean Stress');

@@ -6,9 +6,9 @@ function [app,stp1,stp12,stp2,intV]=logReader(app,fPath,fName)
 %   identified and saved on the correct position.
 
 if nargin==2
-    filenm=[fPath 'LiggghtstoMatlab.txt'];
+    filenm=fullfile(fPath,'LiggghtstoMatlab.txt');
 else
-    filenm=[fPath fName];
+    filenm=fullfile(fPath,fName);
 end
 try opts = detectImportOptions(filenm,'FileType','text','NumHeaderLines',2,'Delimiter','=');
 catch
@@ -24,6 +24,7 @@ M = readtable(filenm,opts); %1-11
 sz=min(30,size(M,1));
 dV=zeros(1,5); %position of piston before compression
 dVO=zeros(1,5); %position of piston before consolidaiton
+DEM='LIGGGHTS';
 for i=1:sz
     switch cell2mat(M{i,1})
             %Geometric values
@@ -53,15 +54,16 @@ for i=1:sz
         case "QcstInit";qcst(1)=str2double(cell2mat(M{i,2}));
         case "QcstRupt";qcst(2)=str2double(cell2mat(M{i,2}));
             %folder Details
-        case "vtkFolder";app.VtkFolder{1}=[fPath cell2mat(M{i,2})];     %VTK files folder
-        case "genFolder";app.DataFolder{1}=[fPath cell2mat(M{i,2})];     %general files folder
-        case "vtkCnsF";app.VtkFolder{1}=[fPath cell2mat(M{i,2})];
-        case "vtkCmpF";app.VtkFolder{2}=[fPath cell2mat(M{i,2})];
-        case "resCnsF";app.DataFolder{1}=[fPath cell2mat(M{i,2})];
-        case "resCmpF";app.DataFolder{2}=[fPath cell2mat(M{i,2})];
+        case "vtkFolder";app.VtkFolder{1}=fullfile(fPath,cell2mat(M{i,2}));     %VTK files folder
+        case "genFolder";app.DataFolder{1}=fullfile(fPath,cell2mat(M{i,2}));     %general files folder
+        case "vtkCnsF";app.VtkFolder{1}=fullfile(fPath,cell2mat(M{i,2}));
+        case "vtkCmpF";app.VtkFolder{2}=fullfile(fPath,cell2mat(M{i,2}));
+        case "resCnsF";app.DataFolder{1}=fullfile(fPath,cell2mat(M{i,2}));
+        case "resCmpF";app.DataFolder{2}=fullfile(fPath,cell2mat(M{i,2}));
             %execution details
         case "ExecutionType";app.ExeType=str2double(cell2mat(M{i,2}));
         case "SimType";st=cell2mat(M{i,2});
+        case "Software";DEM=cell2mat(M{i,2});
     end
 end
 if numel(app.VtkFolder)==1
@@ -87,13 +89,22 @@ else
     end
 end
 
+%Describes which software was used to simulate the test. It changes how
+%data is read (TrialData class). For YADE pistons give directly the stress
+%while for LIGGGHTS we have to calculate stress from piston forces
+if strcmp(DEM,'LIGGGHTS')
+    app.DEMSoftware=1;
+else %YADE
+    app.DEMSoftware=2;
+end
+
 %matlab default colors to mantain every class in the same clor
 app.PlotColors=[0 0.4470 0.7410;
     0.8500 0.3250 0.0980;
-    0.9290 0.6940 0.1250;
     0.4940 0.1840 0.5560;
     0.4460 0.6740 0.1880;
     0.3010 0.7450 0.9330;
-    0.6350 0.0780 0.1840];
+    0.6350 0.0780 0.1840;
+    0.9290 0.6940 0.1250];
 
 end

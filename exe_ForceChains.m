@@ -11,26 +11,7 @@ function exe_ForceChains(app,varargin)
 if nargin>1;FCLoad(app);return;end
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray);
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
 fcPath=MakePath(app,'FC');
 
 %Initiate variables for each type of calculation asked\
@@ -50,7 +31,7 @@ if app.FCClusterCBox.Value
     %Cell array containing Nx4 files on each cell. N representing each fc
     %calculated at each step and 4 being the Cluster size-mean/max/min
     %cluster order
-    clData=cell(nbFiles,2);
+    clData=cell(nbFiles,4);
     pathVTKcl(1)=fcPath+("ForceChainsClst"+N1+"to"+N2+"int"+interval+"/");
     if exist(pathVTKcl(1),'dir')==0;mkdir(pathVTKcl(1));end
 end
@@ -141,8 +122,8 @@ for i=1:nbFiles
     end
     %Force chain clusters
     if app.FCClusterCBox.Value
-        [clData{i,1:2}]=fcClusters(app,fc,gr,sc,step,pathVTKcl);
-        if isempty(clData{i,2});return;end
+        [clData{i,1:4}]=fcClusters(app,fc,gr,sc,step,pathVTKcl);
+        if isempty(clData{i,4});return;end
         %{FcCldata,nb fc grains,av(cl) fc grains,nb others grains, av(cl) others}
     end
     %Force chain bending and cluster transformation
@@ -277,6 +258,7 @@ if numel(pD)>1
 else
     path=MakePath(app,'FC');
 end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 png=".png";
 xlab='Axial strain';
 x='e';
@@ -291,22 +273,26 @@ for i=1:numel(pD)
     end
 end
 %fig=".fig";
-C=app.PlotColors;
+if numel(pD)<8
+    C = app.PlotColors;
+else
+    C = graphClrCode(size(pD,2));%plot colorcode
+end
 
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
 
 %Create Figures and Axis
-nb=9+bend;
+nb=10+bend;
 if numel(pD)==1;nb=nb+1;end
 f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
 for i=1:(nb-1)
     f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on'); %#ok<LAXES>
 end
 
-%Time - Strain - mean(Length) - max (Length) - numel(fc) - ...
-%numel(uniquefc) - numel(sigBranch) - nfc/HSTG - nfc/Tot
+%Strain(1) - Stress(2) - Lngth MB(3) - Lngth SB(4) - nbFC(5) - ...
+%nb branches(6) - nb SB(7) - nfc/HSTG(8) - nfc/Tot(9) - 3p(10) - Bending(11)
 for i=1:size(pD,2)
     j=1;res=pD(i).Results.Base;
     v={};
@@ -317,27 +303,42 @@ for i=1:size(pD,2)
             v=[v,{'Pointx',pD(i).InfPts.ez(a)}]; %#ok<AGROW>
         end
     end
-    if strcmpi(x,'p')
-        xAx=res(:,2);%strain
-    else
-        xAx=res(:,1);%strain
-    end
-    %first graph : number of force chains TREES
+    if strcmpi(x,'p');k=2;else;k=1;end %stress or strain X axis
+    xAx=res(:,k);
+    
+    %first graph : number of force chains
     plotMark(app,ax(j),xAx,res(:,5),'Color',C(i,:),v{:});j=j+1;
-    %third graph : mean force chain length
+    %second graph : mean multi-branch length
     plotMark(app,ax(j),xAx,res(:,3),'Color',C(i,:),v{:});j=j+1;
-    %fourth graph : mean force chain length
+    %third graph : mean single-branch length
     plotMark(app,ax(j),xAx,res(:,4),'Color',C(i,:),v{:});j=j+1;
-    %fifth graph : FC/HS
+    %fourth graph : FC/HS
     plotMark(app,ax(j),xAx,res(:,8),'Color',C(i,:),v{:});j=j+1;
-    %sixth graph : FC/Tot
+    %fifth graph : FC/Tot
     plotMark(app,ax(j),xAx,res(:,9),'Color',C(i,:),v{:});j=j+1;
-    %seventh graph : nb signlebranch/total
-    plotMark(app,ax(j),xAx,100*res(:,7)./...
-        res(:,5),'Color',C(i,:),v{:});j=j+1;
-    %eight graph : 3p
+    %sixth graph : nb signlebranch/total
+    plotMark(app,ax(j),xAx,res(:,7)./...
+        res(:,6),'Color',C(i,:),v{:});j=j+1;
+    %seventh graph : 3p
     plotMark(app,ax(j),xAx,res(:,10),'Color',C(i,:),v{:});j=j+1;
-    %ninith and possible tenth : Nb single branch and nb multible branch
+    %eitght graph : total of branches
+    plotMark(app,ax(j),xAx,res(:,6),'Color',C(i,:),v{:});j=j+1;
+    %Bending
+    if bend
+%         if ~isempty(v) && pD(i).SimType==3
+%             %fixing error in Qcst simuations where bending events should
+%             %not be appearing but were because piston was advancing too
+%             %fast
+%             [~,f1]=min(abs(xAx-v{2}));
+%             f2=find(res(:,end)<10,1,'last');
+%             bl=zeros(size(res,1),1);
+%             bl(f1:f2)=1;
+%             fi=(res(:,end)>10 & logical(bl));
+%             res(fi,end)=floor(rand(sum(fi),1)*10);
+%         end
+        plotMark(app,ax(j),xAx,res(:,end),'Color',C(i,:),v{:});j=j+1;
+    end
+    %Nb single branch and nb multible branch
     plotMark(app,ax(j),xAx,res(:,7),'Color',C(i,:),v{:});
     if numel(pD)==1
         plotMark(app,ax(j),xAx,(res(:,5)-res(:,7)),v{:});
@@ -347,12 +348,9 @@ for i=1:size(pD,2)
     else
         j=j+1;
         plotMark(app,ax(j),xAx,(res(:,5)-res(:,7)),'Color',C(i,:),v{:});
-    end
-    j=j+1;
-    %Bending
-    if bend
-        plotMark(app,ax(j),xAx,res(:,end),'Color',C(i,:),v{:});
-    end
+    end  
+    
+    
 end
 
 if leg && numel(pD)>1
@@ -362,52 +360,52 @@ if leg && numel(pD)>1
 end
 
 i=1;
-%first graph : number of force chains TREES
+%1 graph : number of force chains TREES
 if tit;title(ax(i),'Evolution  of force chains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
 ylabel(ax(i),'Number')
 xlabel(ax(i),xlab)
-fnm="FC_Trees_Number";
+fnm="FC_Number";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%third graph : mean force chain length 
+%2 graph : mean force chain length 
 if tit;title(ax(i),'Evolution of the mean length of MB force chains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
-ylabel(ax(i),'Number of grains')
+ylabel(ax(i),'Length of force chains')
 xlabel(ax(i),xlab)
 fnm="FC_Length_Mean_MB";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%fourth graph : mean force chain length 
+%3 graph : mean force chain length 
 if tit;title(ax(i),'Evolution of the mean length of SB force chains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
-ylabel(ax(i),'Number of grains')
+ylabel(ax(i),'Length of force chains')
 xlabel(ax(i),xlab)
 fnm="FC_Length_Mean_SB";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%fifth graph :FC/HS
+%4 graph :FC/HS
 if tit;title(ax(i),'Ratio of FC/HS grains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
-ylabel(ax(i),'Ratio of grains')
+ylabel(ax(i),'Ratio of chained grains')
 xlabel(ax(i),xlab)
 fnm="FC_Grain_HS_Ratio";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%sixth graph : FC/Tot
+%5 graph : FC/Tot
 if tit;title(ax(i),'Ratio of FC/Tot grains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
-ylabel(ax(i),'Ratio of grains')
+ylabel(ax(i),'Ratio of chained grains')
 xlabel(ax(i),xlab)
 fnm="FC_Grain_Tot_Ratio";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%seventh graph : Ratio of Single branch trees over total
+%6 graph : Ratio of Single branch trees over total
 if tit;title(ax(i),'Ratio of Single branch trees');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
 ylabel(ax(i),'Ratio of force chains')
@@ -416,7 +414,7 @@ fnm="FC_Branches_Ratio";
 saveas(f(i),fullfile(path,fnm+png));
 
 i=i+1;
-%eight graph : Ratio of Single branch trees over total
+%7 graph : Ratio of Single branch trees over total
 if tit;title(ax(i),'Number of 3p');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
 ylabel(ax(i),'Number of 3p')
@@ -426,7 +424,29 @@ saveas(f(i),fullfile(path,fnm+png));
 %saveas(f(nb),path+fnm+fig);
 
 i=i+1;
-%ninith:
+%8graph : Ratio of Single branch trees over total
+if tit;title(ax(i),'Total number of branches');end
+if strcmpi(x,'p');ax(i).XLim(1)=0;end
+ylabel(ax(i),'Number')
+xlabel(ax(i),xlab)
+fnm="FC_Branches";
+saveas(f(i),fullfile(path,fnm+png));
+%saveas(f(nb),path+fnm+fig);
+
+i=i+1;
+%9:
+if bend
+    %Bending results
+    if tit;title(ax(i),'Evolution of Bending Event');end
+    if strcmpi(x,'p');ax(i).XLim(1)=0;end
+    ylabel(ax(i),'Number of bending events')
+    xlabel(ax(i),xlab)
+    fnm="FC_Bending";
+    saveas(f(i),fullfile(path,fnm+png));
+    i=i+1;
+end
+
+%10 to 12
 if tit;title(ax(i),'Number of Force Chains');end
 if strcmpi(x,'p');ax(i).XLim(1)=0;end
 xlabel(ax(i),xlab)
@@ -435,6 +455,7 @@ if numel(pD)==1
     fnm="FC_Branch_Comp";
     saveas(f(i),fullfile(path,fnm+png));
     i=i+1;
+    
     %tenth: Angle plot
     res=pD.Results.Elevation;
     dA=15;aCat=90/dA;
@@ -488,17 +509,6 @@ else
     saveas(f(i),fullfile(path,fnm+png));
 end
 
-if bend
-    i=i+1;
-    %Bending results
-    if tit;title(ax(i),'Evolution of Bending Event');end
-    if strcmpi(x,'p');ax(i).XLim(1)=0;end
-    ylabel(ax(i),'Number of bending events')
-    xlabel(ax(i),xlab)
-    fnm="FC_Bending";
-    saveas(f(i),fullfile(path,fnm+png));
-end
-
 if nargin>2
     f(nb+1)=figure;ax(nb+1)=axes(f(nb+1));hold(ax(nb+1),'on');
     vals=varargin{1};
@@ -506,7 +516,7 @@ if nargin>2
     if tit;title(ax(nb+1),'Ratio of time in force chain');end
     ylabel(ax(nb+1),'Ratio')
     xlabel(ax(nb+1),'Grain ID')
-    fnm="FCRatioGrains";
+    fnm="Grain_Ration_FC";
     saveas(f(nb+1),fullfile(path,fnm+png));
 end
 
@@ -540,21 +550,14 @@ end
 function fcClstPlotter(app,pD,varargin)
 %FCPLOTTER Plot data for Force Chain calculations
 
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 %Create Figures and Axis
-if size(pD,2)==1
-    nplg=12;
-    g(nplg)=figure;axG(nplg)=axes(g(nplg));hold(axG(nplg),'on');
-    for i=1:(nplg-1)
-        g(i)=figure;axG(i)=axes(g(i));hold(axG(i),'on'); %#ok<LAXES>
-    end
+nplg=9;
+if size(pD.Results.Data,2)==4;nplg=nplg+9;end
+f(nplg)=figure;ax(nplg)=axes(f(nplg));hold(ax(nplg),'on');
+for i=1:(nplg-1)
+    f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on'); %#ok<LAXES>
 end
-
-% N1=app.N1EF.Value;
-% N2=app.N2EF.Value;
-% TD  = inflectionPoints(app.TrialData,app);
-% pD.InfPts=TD.InfPts;
-% fnm=MakePath(app,'FCCL')+"ForceChains-Cluster"+N1+"to"+N2+".mat";
-% save(fnm,'pD','-v7.3');
 
 path=MakePath(app,'FCCL');
 if nargin>2
@@ -566,283 +569,415 @@ xlab='Axial strain';
 x='e';
 for i=1:numel(pD)
     if pD(i).SimType==3
-       xlab='Mean pressure (kPA)';
-       x='p';  
+        xlab='Mean pressure (kPA)';
+        x='p';
     end
 end
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
 
-if size(pD,2)==1
-    C=app.PlotColors;
+C=app.PlotColors;
+if strcmpi(x,'p')
+    xAx=pD(i).Results.Pressure;%strain
+else
+    xAx=pD(i).Results.Strain;%strain
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%% - PLOT DATA - %%%%%%%%%%%%%%%%%%%%%%%%%
+lpData=pD.Results.Data(:,2);
+lpData=cat(1,lpData{:});
+totNb1=sum(lpData,3);
+% clusters of each type
+v={};
+for k=1:numel(pD(1).InfPts.q)
     if strcmpi(x,'p')
-        xAx=pD(i).Results.Pressure;%strain
+        v=[v,{'Pointx',pD(1).InfPts.p(k)}]; %#ok<AGROW>
     else
-        xAx=pD(i).Results.Strain;%strain
+        v=[v,{'Pointx',pD(1).InfPts.ez(k)}]; %#ok<AGROW>
     end
-    
-    lpData=pD.Results.Data(:,2);
+end
+                    %%%% - NBPLOT - %%%%
+j=1;
+%plot FC cl category nb
+plotMark(app,ax(j),xAx,lpData(:,1,1)./totNb1(:,1),'Color',C(1,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,2)./totNb1(:,1),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,3)./totNb1(:,1),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,4)./totNb1(:,1),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot FC cl category nb - NO 4
+plotMark(app,ax(j),xAx,lpData(:,1,2)./totNb1(:,1),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,3)./totNb1(:,1),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,4)./totNb1(:,1),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot NFC cl category nb
+plotMark(app,ax(j),xAx,lpData(:,2,1)./totNb1(:,2),'Color',C(1,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,2)./totNb1(:,2),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,3)./totNb1(:,2),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,4)./totNb1(:,2),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot NFC cl category nb - NO 4
+plotMark(app,ax(j),xAx,lpData(:,2,2)./totNb1(:,2),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,3)./totNb1(:,2),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,4)./totNb1(:,2),'Color',C(4,:),v{:});
+
+                    %%%% - PERCELLPLOT - %%%%
+lpData=pD.Results.Data(:,1);
+lpData=cat(1,lpData{:});
+totCl1=sum(lpData,3);
+j=j+1;
+%plot FC cl category PERCENTAGE
+plotMark(app,ax(j),xAx,lpData(:,1,1)./totCl1(:,1),'Color',C(1,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,2)./totCl1(:,1),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,3)./totCl1(:,1),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,4)./totCl1(:,1),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot FC cl category PERCENTAGE - NO 4
+plotMark(app,ax(j),xAx,lpData(:,1,2)./totCl1(:,1),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,3)./totCl1(:,1),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,1,4)./totCl1(:,1),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot NFC cl category PERCENTAGE
+plotMark(app,ax(j),xAx,lpData(:,2,1)./totCl1(:,2),'Color',C(1,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,2)./totCl1(:,2),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,3)./totCl1(:,2),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,4)./totCl1(:,2),'Color',C(4,:),v{:});
+
+j=j+1;
+%plot NFC cl category PERCENTAGE - NO 4
+plotMark(app,ax(j),xAx,lpData(:,2,2)./totCl1(:,2),'Color',C(2,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,3)./totCl1(:,2),'Color',C(3,:),v{:});
+plotMark(app,ax(j),xAx,lpData(:,2,4)./totCl1(:,2),'Color',C(4,:),v{:});
+
+
+        %%%%%%%% - Calculation 2 - %%%%%%%%
+if size(pD.Results.Data,2)==4
+                        %%%% - NbPlot - %%%%
+    lpData=pD.Results.Data(:,4);
     lpData=cat(1,lpData{:});
-    totCl=sum(lpData,3);
-    % clusters of each type
-    v={};
-    for k=1:numel(pD(1).InfPts.q)
-        if strcmpi(x,'p')
-            v=[v,{'Pointx',pD(1).InfPts.p(k)}]; %#ok<AGROW>
+    totNb2=sum(lpData,3);
+    j=j+1;
+    %plot FC nb category PERCENTAGE
+    plotMark(app,ax(j),xAx,lpData(:,1,1)./totNb2(:,1),'Color',C(1,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,2)./totNb2(:,1),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,3)./totNb2(:,1),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,4)./totNb2(:,1),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot FC nb category PERCENTAGE - NO 4
+    plotMark(app,ax(j),xAx,lpData(:,1,2)./totNb2(:,1),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,3)./totNb2(:,1),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,4)./totNb2(:,1),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot NFC nb category PERCENTAGE
+    plotMark(app,ax(j),xAx,lpData(:,2,1)./totNb2(:,2),'Color',C(1,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,2)./totNb2(:,2),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,3)./totNb2(:,2),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,4)./totNb2(:,2),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot NFC nb category PERCENTAGE - NO 4
+    plotMark(app,ax(j),xAx,lpData(:,2,2)./totNb2(:,2),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,3)./totNb1(:,2),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,4)./totNb2(:,2),'Color',C(4,:),v{:});
+
+                        %%%% - PERCELLPLOT - %%%%
+    lpData=pD.Results.Data(:,3);
+    lpData=cat(1,lpData{:});
+    totCl2=sum(lpData,3);
+    j=j+1;
+    %plot FC cl category PERCENTAGE
+    plotMark(app,ax(j),xAx,lpData(:,1,1)./totCl2(:,1),'Color',C(1,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,2)./totCl2(:,1),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,3)./totCl2(:,1),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,4)./totCl2(:,1),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot FC cl category PERCENTAGE - NO 4
+    plotMark(app,ax(j),xAx,lpData(:,1,2)./totCl2(:,1),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,3)./totCl2(:,1),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,1,4)./totCl2(:,1),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot NFC cl category PERCENTAGE
+    plotMark(app,ax(j),xAx,lpData(:,2,1)./totCl2(:,2),'Color',C(1,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,2)./totCl2(:,2),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,3)./totCl2(:,2),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,4)./totCl2(:,2),'Color',C(4,:),v{:});
+    
+    j=j+1;
+    %plot NFC cl category PERCENTAGE - NO 4
+    plotMark(app,ax(j),xAx,lpData(:,2,2)./totCl2(:,2),'Color',C(2,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,3)./totCl2(:,2),'Color',C(3,:),v{:});
+    plotMark(app,ax(j),xAx,lpData(:,2,4)./totCl2(:,2),'Color',C(4,:),v{:});
+
+end
+
+                    %%%% - RATIO OF FCC in relation to all - %%%%
+        %%%%%%%% - Calculation 1 - %%%%%%%%
+j=j+1;
+plotMark(app,ax(j),xAx,totNb1(:,1)./sum(totNb1,2),'Color',C(1,:),v{:});
+plotMark(app,ax(j),xAx,totCl1(:,1)./sum(totCl1,2),'Color',C(2,:),v{:});
+        %%%%%%%% - Calculation 2 - %%%%%%%%
+if size(pD.Results.Data,2)==4
+    j=j+1;
+    %plot the ratio of FCC in number and in cell in relation to total amount
+    plotMark(app,ax(j),xAx,totNb2(:,1)./sum(totNb2,2),'Color',C(1,:),v{:});
+    plotMark(app,ax(j),xAx,totCl2(:,1)./sum(totCl2,2),'Color',C(2,:),v{:});
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%% - LEGEND AND SAVE - %%%%%%%%%%%%%%%%%%%%%%%%%
+if leg
+    for j=1:min(nplg-1,16)
+        if rem(j,2)==1
+            legend(ax(j),"Order 4","Order 6","Order 8-20",...
+                "Order 22+",'location','eastoutside')
         else
-            v=[v,{'Pointx',pD(1).InfPts.ez(k)}]; %#ok<AGROW>
-        end
-    end
-    j=1;
-    %plot FC cl category
-    plotMark(app,axG(j),xAx,lpData(:,1,1),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot FC cl category - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,1,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category
-    plotMark(app,axG(j),xAx,lpData(:,2,1),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,2,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot FC cl category PERCENTAGE
-    plotMark(app,axG(j),xAx,lpData(:,1,1)./totCl(:,1),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,2)./totCl(:,1),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3)./totCl(:,1),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4)./totCl(:,1),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot FC cl category PERCENTAGE - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,1,2)./totCl(:,1),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3)./totCl(:,1),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4)./totCl(:,1),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category PERCENTAGE
-    plotMark(app,axG(j),xAx,lpData(:,2,1)./totCl(:,2),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,2)./totCl(:,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3)./totCl(:,2),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4)./totCl(:,2),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category PERCENTAGE - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,2,2)./totCl(:,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3)./totCl(:,2),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4)./totCl(:,2),'Color',C(4,:),v{:});
-    
-    %%%% - PERCELPLOT - %%%%
-    lpData=pD.Results.Data(:,1);
-    lpData=cat(1,lpData{:});
-    totCl=sum(lpData,3);
-    j=j+1;
-    %plot FC cl category PERCENTAGE
-    plotMark(app,axG(j),xAx,lpData(:,1,1)./totCl(:,1),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,2)./totCl(:,1),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3)./totCl(:,1),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4)./totCl(:,1),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot FC cl category PERCENTAGE - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,1,2)./totCl(:,1),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,3)./totCl(:,1),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,1,4)./totCl(:,1),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category PERCENTAGE
-    plotMark(app,axG(j),xAx,lpData(:,2,1)./totCl(:,2),'Color',C(1,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,2)./totCl(:,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3)./totCl(:,2),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4)./totCl(:,2),'Color',C(4,:),v{:});
-
-    j=j+1;
-    %plot NFC cl category PERCENTAGE - NO 4
-    plotMark(app,axG(j),xAx,lpData(:,2,2)./totCl(:,2),'Color',C(2,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,3)./totCl(:,2),'Color',C(3,:),v{:});
-    plotMark(app,axG(j),xAx,lpData(:,2,4)./totCl(:,2),'Color',C(4,:),v{:});
-    
-    
-    if leg
-        for j=1:nplg
-            if rem(j,2)==1
-                legend(axG(j),"Order 4","Order 6","Order 8-20",...
-                    "Order 22+",'location','eastoutside')
-            else
-                legend(axG(j),"Order 6","Order 8-20","Order 22+",...
-                    'location','eastoutside')
-            end
+            legend(ax(j),"Order 6","Order 8-20","Order 22+",...
+                'location','eastoutside')
         end
     end
 end
 
-
-if size(pD,2)==1
-    j=1;
-    %Prepare axis to get the same value between NFC and FC equal graphs
-    lim=axG(j).XLim;
-    %NUMBER - FCC
-    if tit;title(axG(j),'Distribution of FCC');end
-    ylabel(axG(j),'Number of FCC')
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j+2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    xlabel(axG(j),xlab)
-    fnm="FCC_Nb";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %NUMBER - FCC - NO4
-    if tit;title(axG(j),'Distribution of FCC');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j+2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Number of FCC')
-    xlabel(axG(j),xlab)
-    fnm="FCC_Nb_No4";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %NUMBER - NFCC
-    if tit;title(axG(j),'Distribution of NFCC');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j-2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Number of NFCC')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Nb";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %NUMBER - NFCC - NO4
-    if tit;title(axG(j),'Distribution of NFCC');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j-2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Number of NFCC')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Nb_No4";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %PERCENTAGE - FCC
-    if tit;title(axG(j),'Distribution of FCC');end
-    axG(j).YLim =[0,1];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of FCC')
-    xlabel(axG(j),xlab)
-    fnm="FCC_Pct";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %PERCENTAGE - FCC - NO4
-    if tit;title(axG(j),'Distribution of FCC');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j+2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of FCC')
-    xlabel(axG(j),xlab)
-    fnm="FCC_Pct_No4";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %PERCENTAGE - NFCC
-    if tit;title(axG(j),'Distribution of NFCC');end
-    axG(j).YLim =[0,1];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of NFCC')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Pct";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %PERCENTAGE - NFCC - NO4
-    if tit;title(axG(j),'Distribution of NFCC');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j-2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of NFCC')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Pct_No4";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %CELL - FCC
-    if tit;title(axG(j),'Distribution of FCC cells');end
-    axG(j).YLim =[0,1];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of FCC cells')
-    xlabel(axG(j),xlab)
-    fnm="FCC_Cell";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %CELL - FCC - NO4
-    if tit;title(axG(j),'Distribution of FCC cells');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j+2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of FCC')
-    xlabel(axG(j),xlab)
-    fnm="FCC_Cell_No4";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %CELL - NFCCE
-    if tit;title(axG(j),'Distribution of NFCC cells');end
-    axG(j).YLim =[0,1];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of NFCC cells')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Cell";
-    saveas(g(j),fullfile(path,fnm+png));
-    j=j+1;
-    
-    %CELL - NFCC - NO4
-    if tit;title(axG(j),'Distribution of NFCC cells');end
-    axG(j).YLim =[0,max(axG(j).YLim(2),axG(j-2).YLim(2))];
-    if strcmpi(x,'e')
-        xticks(axG(j),lim(1):0.05:lim(2))
-    end
-    ylabel(axG(j),'Ratio of NFCC cells')
-    xlabel(axG(j),xlab)
-    fnm="NFCC_Cell_No4_No4";
-    saveas(g(j),fullfile(path,fnm+png));
+                    %%%% - Nb plot 1 - %%%%
+j=1;
+%Prepare axis to get the same value between NFC and FC equal graphs
+lim=ax(j).XLim;
+%NUMBER - FCC
+if tit;title(ax(j),'Distribution of FCC nb');end
+ylabel(ax(j),'Ratio of FCC (number)')
+ax(j).YLim =[0,1];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
 end
+xlabel(ax(j),xlab)
+fnm="FCC_Nb";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%NUMBER - FCC - NO4
+if tit;title(ax(j),'Distribution of FCC nb');end
+ax(j).YLim =[0,max(ax(j).YLim(2),ax(j+2).YLim(2))];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of FCC (number)')
+xlabel(ax(j),xlab)
+fnm="FCC_Nb_No4";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%NUMBER - NFCC
+if tit;title(ax(j),'Distribution of NFCC nb');end
+ax(j).YLim =[0,1];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of NFCC (number)')
+xlabel(ax(j),xlab)
+fnm="NFCC_Nb";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%NUMBER - NFCC - NO4
+if tit;title(ax(j),'Distribution of NFCC nb');end
+ax(j).YLim =[0,max(ax(j).YLim(2),ax(j-2).YLim(2))];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of NFCC (number)')
+xlabel(ax(j),xlab)
+fnm="NFCC_Nb_No4";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+                    %%%% - Cell plot 1 - %%%%
+%CELL - FCC
+if tit;title(ax(j),'Distribution of FCC cell');end
+ax(j).YLim =[0,1];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of FCC (cells)')
+xlabel(ax(j),xlab)
+fnm="FCC_Cell";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%CELL - FCC - NO4
+if tit;title(ax(j),'Distribution of FCC cell');end
+ax(j).YLim =[0,max(ax(j).YLim(2),ax(j+2).YLim(2))];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of FCC (cells)')
+xlabel(ax(j),xlab)
+fnm="FCC_Cell_No4";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%CELL - NFCCE
+if tit;title(ax(j),'Distribution of NFCC cell');end
+ax(j).YLim =[0,1];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of NFCC (cells)')
+xlabel(ax(j),xlab)
+fnm="NFCC_Cell";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+%CELL - NFCC - NO4
+if tit;title(ax(j),'Distribution of NFCC cell');end
+ax(j).YLim =[0,max(ax(j).YLim(2),ax(j-2).YLim(2))];
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+ylabel(ax(j),'Ratio of NFCC (cells)')
+xlabel(ax(j),xlab)
+fnm="NFCC_Cell_No4";
+saveas(f(j),fullfile(path,fnm+png));
+j=j+1;
+
+if size(pD.Results.Data,2)==4
+    %%%% - NB plot 2 - %%%%
+    %Nb2 - FCC
+    if tit;title(ax(j),'Distribution of FCC nb (2)');end
+    ax(j).YLim =[0,1];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of FCC (number)')
+    xlabel(ax(j),xlab)
+    fnm="FCC_Nb2";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %Nb2 - FCC - NO4
+    if tit;title(ax(j),'Distribution of FCC nb (2)');end
+    ax(j).YLim =[0,max(ax(j).YLim(2),ax(j+2).YLim(2))];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of FCC (number)')
+    xlabel(ax(j),xlab)
+    fnm="FCC_Nb2_No4";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %Nb2 - NFCC
+    if tit;title(ax(j),'Distribution of NFCC nb (2)');end
+    ax(j).YLim =[0,1];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of NFCC (number)')
+    xlabel(ax(j),xlab)
+    fnm="NFCC_Nb2";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %Nb2 - NFCC - NO4
+    if tit;title(ax(j),'Distribution of NFCC nb (2)');end
+    ax(j).YLim =[0,max(ax(j).YLim(2),ax(j-2).YLim(2))];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of NFCC (number)')
+    xlabel(ax(j),xlab)
+    fnm="NFCC_Nb2_No4";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %%%% - Cell plot 2 - %%%%
+
+    %CELL2 - FCC
+    if tit;title(ax(j),'Distribution of FCC cells (2)');end
+    ax(j).YLim =[0,1];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of FCC (cells)')
+    xlabel(ax(j),xlab)
+    fnm="FCC_Cell2";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %CELL2 - FCC - NO4
+    if tit;title(ax(j),'Distribution of FCC cells (2)');end
+    ax(j).YLim =[0,max(ax(j).YLim(2),ax(j+2).YLim(2))];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of FCC (cells)')
+    xlabel(ax(j),xlab)
+    fnm="FCC_Cell2_No4";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %CELL2 - NFCCE
+    if tit;title(ax(j),'Distribution of NFCC cells (2)');end
+    ax(j).YLim =[0,1];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of NFCC (cells)')
+    xlabel(ax(j),xlab)
+    fnm="NFCC_Cell2";
+    saveas(f(j),fullfile(path,fnm+png));
+    j=j+1;
+
+    %CELL2 - NFCC - NO4
+    if tit;title(ax(j),'Distribution of NFCC cells (2)');end
+    ax(j).YLim =[0,max(ax(j).YLim(2),ax(j-2).YLim(2))];
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    ylabel(ax(j),'Ratio of NFCC (cells)')
+    xlabel(ax(j),xlab)
+    fnm="NFCC_Cell2_No4";
+    saveas(f(j),fullfile(path,fnm+png));
+
+    %Ratio of FCC nb and cells
+    j=j+2;
+    ax(j).YLim =[0,max(ax(j).YLim(2),ax(j-1).YLim(2))];
+    ax(j-1).YLim =[0,max(ax(j).YLim(2),ax(j-1).YLim(2))];
+    if tit;title(ax(j),'Ratio of FCC Nb and Cells');end
+    if strcmpi(x,'e')
+        xticks(ax(j),lim(1):0.05:lim(2))
+    end
+    legend(ax(j),'Number','Cells','Location','southeast')
+    ylabel(ax(j),'Ratio of FCC')
+    xlabel(ax(j),xlab)
+    fnm="Ratio_FCC2";
+    saveas(f(j),fullfile(path,fnm+png));
+    
+
+end
+
+j=j-1;
+%Ratio of FCC nb and cells
+if tit;title(ax(j),'Ratio of FCC Nb and Cells');end
+if strcmpi(x,'e')
+    xticks(ax(j),lim(1):0.05:lim(2))
+end
+legend(ax(j),'Number','Cells','Location','southeast')
+ylabel(ax(j),'Ratio of FCC')
+xlabel(ax(j),xlab)
+fnm="Ratio_FCC";
+saveas(f(j),fullfile(path,fnm+png));
 
 %outside legend
-if ~leg && numel(pD)==1
+if ~leg
     %Order 4+ Legend
-    p=copyobj(g(1),0);
+    p=copyobj(f(1),0);
     l=legend(p.CurrentAxes,"Order 4","Order 6","Order 8-20",...
             "Order 22+",'Orientation','horizontal');
     l.EdgeColor='none';
@@ -853,7 +988,7 @@ if ~leg && numel(pD)==1
     saveas(p,fullfile(path,"Legend_Order"+png));
     
     %order 6+Legend
-    q=copyobj(g(2),0);
+    q=copyobj(f(2),0);
     l=legend(q.CurrentAxes,"Order 6","Order 8-20",...
             "Order 22+",'Orientation','horizontal');
     l.EdgeColor='none';
@@ -871,7 +1006,7 @@ end
 if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,...
         app.ExeAllButton) || nargin>2
     %delete(f);
-    if numel(pD)==1;delete(g);end
+    if numel(pD)==1;delete(f);end
 end
 end
 function fcTransfPlotter(pD,app)
@@ -886,7 +1021,7 @@ if app.LegendsCB.Value;leg=1;else;leg=0;end
 path=MakePath(app,'FCCLTF');
 png='.png';
 C=app.PlotColors;
-
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 %prepare variables for execution
 ctRes=pD.Results;
 cl=zeros(size(ctRes.ClTransf,1),3,4);%cluster data 
@@ -1104,20 +1239,25 @@ fcData=[step mnMB mnSB numel(fc)...
     sum([fc.NbBranches]) sum(sbFC)...
     nfcg/gr.HighStrGrains nfcg/gr.Nb size(gr.ThreeP,1)];
 end
-function [fcClCell,fcClNb]=fcClusters(app,fc,gr,sc,step,pathVTK)
+function [fcClCell,fcClNb,fcClCell2,fcClNb2]=fcClusters(app,fc,gr,sc,step,pathVTK)
 %FCCLUSTER join force chain an cluster calculation data
-% A cluster is considered as belonging in a force chain if at least one of
-% its closed edges makes part of the force transmission.
+% Two calculations will be executed. The first considers clusters as part of 
+% force chain if they share a closed contact. Second considers cluster any 
+% cluster sharing a grain with the FC as belonging to it.
 %
 % This function will use a spaceCellSystem object that contains the data
 % from a previous cluster calculation and match with a forcechain object to
 % identify the clusters that make part of the latter.
 
 %General values
-idGr=sort(cat(1,fc.IDs)); %identify grains forming the force chain
-nbCl=numel(sc.Loops);nbCl4=sc.Clt4.nbCells;%nb of clusters
-O=cat(1,sc.Loops.Order);C=cat(1,sc.Loops.nbCells);
+fcGrains=sort(cat(1,fc.IDs));       %identify grains forming the force chain
+nbCl=numel(sc.Loops);               %nb of clusters
+nbCl4=sc.Clt4.nbCells;              %nb of clusters 4
+Order=cat(1,sc.Loops.Order);        %cluster order
+Cells=cat(1,sc.Loops.nbCells);      %ID of cluster cells
+Size=cat(1,sc.Loops.Size);          %size of clusters
 
+%%%%%%%%%%%%%%%%% Prepare first analysis %%%%%%%%%%%%%%%%%
 %Create a list of all closed edges forming clusters, with the ID of the
 %cluster in the third column and order as fourth
     %count the nb of closed edges per cluster
@@ -1125,14 +1265,14 @@ l=cell(nbCl,1);
 [l{:}]=sc.Loops.ClEdges;
 [nbCEdges,~]=cellfun(@size,l);
     %create a GrID1-GrID2-ClID-Order-nbCells vector for each closed contact
-clGr=[(1:nbCl)',O,C]; %ClID-Order-nbCells
-clCE=[cat(1,sc.Loops.ClEdges) repelem(clGr,nbCEdges,1)];
+clInfo=[(1:nbCl)',Order,Cells]; %ClID-Order-nbCells
+clCE=[cat(1,sc.Loops.ClEdges) repelem(clInfo,nbCEdges,1)]; %GrID1-GrID2-ClID-Order-nbCells
     %add cl4 to the analysis. All edges of Cl4 will be added and not only
     %the closed ones. But as it will be later compared to closed edges
     %belonging to force chains it will be automatically filtered
     %identify clusters4 edges
 if isempty(sc.GoodCells);sc.GoodCells = goodCell(sc);end
-cl4Id=sc.GoodCells(~ismember(sc.GoodCells,cat(2,sc.Loops.sCells)')); %id Cl4 cell location
+cl4Id=sc.Clt4.sCells; %id Cl4 cell
 cl4grs=sc.DelaunayT(cl4Id,:); %cl4 grains
 cb=nchoosek(1:4,2); %combination
 clCE4=[cl4grs(:,cb(1,:));...
@@ -1145,29 +1285,47 @@ clCE4=[cl4grs(:,cb(1,:));...
 clGr4=[(nbCl+1:nbCl+nbCl4);ones(1,nbCl4)*4;ones(1,nbCl4)]';
 clCE4=[clCE4 repmat(clGr4,6,1)];
 
-%merge both vectors
+    %merge both vectors
 clCE=[clCE;clCE4];
- %only keep lines that contain grains from force chain
-clCE=clCE(ismember(clCE(:,1),idGr) & ismember(clCE(:,2),idGr),:);
+    %only keep lines that contain grains from force chain
+clCE=clCE(ismember(clCE(:,1),fcGrains) & ismember(clCE(:,2),fcGrains),:);
+
+%%%%%%%%%%%%%%%%% Prepare second analysis %%%%%%%%%%%%%%%%%
+%Create a list that resembles the previous ones, but for each individual
+%grain insted of the contact %GrID1 - ClID - ClOrder 
+clCEv2=[cat(1,sc.Loops.Grains) repelem(clInfo,Size,1)]; %GrID-ClID-Order-nbCells
+    %add cl4s - first transform cl4gr matrix  in a vector of gr IDs
+cl4grs=reshape(cl4grs',[],1);
+    %for each gr repeat Cell ID Cell Order
+clCE4=[cl4grs repmat(clGr4,4,1)];
+    %join vectors
+clCEv2=[clCEv2;clCE4];
+    %only keep lines with FC grains
+clCEv2=clCEv2(ismember(clCEv2(:,1),fcGrains),:);
 
 %for each force chain, compare the force chain contacts with clCE matrix
 %to identify the ID of the clusters forming it.
 fcChk=ones(numel(fc),1);
+fcLpInf=cell(numel(fc),1);    %stores ID,Order and NbCells of each loop per FC for calculation 2
 for i=1:numel(fc)
+    %%%% first calculation %%%%
     lp=ismember(clCE(:,1:2),fc(i).Lines,'rows');
     if isempty(lp)
         %if there are no clusters in the force chains, the fc must be
         %located around the wall and surrounded by 'fakegrains'. Thus it
         %should be removed from the calculation
-        fcChk(i)=1;continue
+        fcChk(i)=1;
+    else
+        lp=unique(clCE(lp,3:end),'rows');  %ClusterID - ClusterOrder - NbCells
+        %max - min - mean order values
+        fc(i).ClustersVals=[max(lp(:,2)),min(lp(:,2)),mean(lp(:,2))];
+        fc(i).ClustersID=lp;
     end
-    lp=unique(clCE(lp,3:end),'rows');  %ClusterID - ClusterOrder - NbCells
-    
-    %max - min - mean order values
-    fc(i).ClustersVals=[max(lp(:,2)),min(lp(:,2)),mean(lp(:,2))]; 
-    fc(i).ClustersID=lp;
+    %%%% Second Calculation %%%%
+    lp=ismember(clCE(:,1),fc(i).IDs); %compare grains with the list
+    fcLpInf{i}=unique(clCEv2(lp,2:end),'rows');  %get unique lines
 end
-        
+
 %remove excess data from the bad force chains
 fcChk=logical(fcChk);       %turn into logical
 fc=fc(fcChk);               %delete bad fc
@@ -1184,34 +1342,71 @@ vtkwrite(pathVTK(1)+"grainsFC"+step+".vtk",'unstructured_grid',...
 %FCC - count force chain clusters
     %get order of clusters beglonging to FC
 fcClNb=unique(cat(1,fc.ClustersID),'rows');
-	%check nb per category
-nbCl4=sum(fcClNb(:,2)==4);            %small
-nbCl6=sum(fcClNb(:,2)==6);            %submedium
-nbCl8=sum(fcClNb(:,2)>6 & fcClNb(:,2)<21);	%medium
-nbCl22=sum(fcClNb(:,2)>21);           %large
+results=zeros(1,4,4);
 
-%NFCC - non-force chain clusters are total minus FCC
-nbCl4(2)=sc.Clt4.nbCells-nbCl4;
-nbCl6(2)=sum(O==6)-nbCl6;            
-nbCl8(2)=sum(O>6 & O<21)-nbCl8;	
-nbCl22(2)=sum(O>21)-nbCl22;
+%small category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcClNb(:,2)==4;
+results(:,:,1)=[sum(chk),sc.Clt4.nbCells,sum(fcClNb(chk,3)),sc.Clt4.nbCells]; 
+results(:,[2,4],1)=results(:,[2,4],1)-results(:,[1,3],1); 
 
-%check cell per categories
-clCl4=sum(fcClNb(fcClNb(:,2)==4,3));            %small
-clCl6=sum(fcClNb(fcClNb(:,2)==6,3));            %submedium
-clCl8=sum(fcClNb(fcClNb(:,2)>6 & fcClNb(:,2)<21,3));	%medium
-clCl22=sum(fcClNb(fcClNb(:,2)>21,3));           %large
+%submedium category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcClNb(:,2)==6;
+chk2=Order==6;
+results(:,:,2)=[sum(chk),sum(chk2),sum(fcClNb(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],2)=results(:,[2,4],2)-results(:,[1,3],2); 
 
-%NFCC - non-force chain clusters are total minus FCC
-clCl4(2)=sc.Clt4.nbCells-clCl4;
-clCl6(2)=sum(C(O==6))-clCl6;            
-clCl8(2)=sum(C(O>6 & O<21))-clCl8;	
-clCl22(2)=sum(C(O>21))-clCl22;
+%medium category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcClNb(:,2)>6 & fcClNb(:,2)<21;
+chk2=Order>6 & Order<21;
+results(:,:,3)=[sum(chk),sum(chk2),sum(fcClNb(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],3)=results(:,[2,4],3)-results(:,[1,3],3); 
 
-%concatenate them in third dimention so next step can go as next line
-fcClNb=cat(3,nbCl4,nbCl6,nbCl8,nbCl22);
-fcClCell=cat(3,clCl4,clCl6,clCl8,clCl22);
+%large category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcClNb(:,2)>21;
+chk2=Order>21;
+results(:,:,4)=[sum(chk),sum(chk2),sum(fcClNb(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],4)=results(:,[2,4],4)-results(:,[1,3],4); 
 
+fcClNb=results(:,1:2,:);
+fcClCell=results(:,3:4,:);
+
+
+%%%%%%%%%%% Calculation 2 %%%%%%%%%%%%%%
+%data analysis for the second calculation.
+%first transform the cell vector in a matrix and get the unique lines
+fcLpInf=unique(cat(1,fcLpInf{:}),'rows');
+
+%FCC - count force chain clusters
+    %get order of clusters beglonging to FC
+results=zeros(1,4,4);
+
+%small category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcLpInf(:,2)==4;
+results(:,:,1)=[sum(chk),sc.Clt4.nbCells,sum(fcLpInf(chk,3)),sc.Clt4.nbCells]; 
+results(:,[2,4],1)=results(:,[2,4],1)-results(:,[1,3],1); 
+
+%submedium category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcLpInf(:,2)==6;
+chk2=Order==6;
+results(:,:,2)=[sum(chk),sum(chk2),sum(fcLpInf(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],2)=results(:,[2,4],2)-results(:,[1,3],2); 
+
+%medium category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcLpInf(:,2)>6 & fcLpInf(:,2)<21;
+chk2=Order>6 & Order<21;
+results(:,:,3)=[sum(chk),sum(chk2),sum(fcLpInf(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],3)=results(:,[2,4],3)-results(:,[1,3],3); 
+
+%large category FCC nb - NFCC nb - FCC cell - NFCC cell
+chk=fcLpInf(:,2)>21;
+chk2=Order>21;
+results(:,:,4)=[sum(chk),sum(chk2),sum(fcLpInf(chk,3)),sum(Cells(chk2))];
+results(:,[2,4],4)=results(:,[2,4],4)-results(:,[1,3],4); 
+
+fcClNb2=results(:,1:2,:);
+fcClCell2=results(:,3:4,:);
+
+%VTK Plot of individual grain evolution
 if app.FCGrVtkCBox.Value
     fcGrainVTK(app,sc,cl4Id,nbCl,fc,gr,step,pathVTK(2))
 end
@@ -1389,113 +1584,61 @@ end
 
 end
 %{
-function [FcClData,clCat]=fcClustersOld(app,fc,gr,sc,step,pathVTK)
-%FCCLUSTER join force chain an cluster calculation data
-% A cluster is considered as belonging in a force chain if at least one of
-% its closed edges makes part of the force transmission.
-%
-% This function will use a spaceCellSystem object that contains the data
-% from a previous cluster calculation and match with a forcechain object to
-% identify the clusters that make part of the latter.
+%%%%%%%%%%%%%%%%% Second calculation %%%%%%%%%%%%%%%%%%
+% Count the the order of the cells located arround the force chains
 
-%First part - find out for each grain the clusters it is attached to. 
-idGr=sort(cat(1,fc.IDs));
-sGr = findClusterGrain('ForceChain',sc,idGr,gr);
-
-
-%for each force chain - get all the singleGrain objects that make part of
-%the chain. Check then for Clsuters that have a common closed edge with the
-%force chain
-FcClData=zeros(numel(fc),5);
-fcChk=ones(numel(fc),1);
-for i=1:numel(fc)
-    %get the position of the grains forming the fc(i) in the singleGrain
-    %objects array created, as it only contains grains belonging to all FCs.
-    grID=find(ismember(idGr,fc(i).IDs));
-    clt=cat(1,sGr(grID).ClusterID);
-    %check for repeating clusters IDs in the obtained grains
-    [uClt,~,cnt]=unique(clt(:,1));	%unique value and their oder
-    h=accumarray(cnt,ones(numel(cnt),1)); %get nb of repeated values
-    uClt=uClt(h>1);  %get the ID of the clusters repeated more than once
-    
-    %update each grain's clusters only with the clusters inside the force
-    %chain. As each grain can only belong to a single force chain, the
-    %value save does not need to be done at the end.
-    gr0=0; %check for gr with no clusters shared with contact
-    for j=1:numel(grID)
-        chk=ismember(sGr(grID(j)).ClusterID(:,1),uClt);
-        if sum(chk)==0 || isempty(chk)
-            %if chk is 0 means that the grain analysed does not share a
-            %cluster with any of the other grains. The reason for this is
-            %that the cells that would join them are in connection with
-            %'fakegrains' and so removed from the cluster calculation. This
-            %force chain then should be removed from the calculation
-            gr0=1;
-            break
-        end
-        sGr(grID(j)).ClusterID=sGr(grID(j)).ClusterID(chk,:);  %ClusterID - ClusterOrder
-        sGr(grID(j)).ClusterVal=[max(sGr(grID(j)).ClusterID(:,2)),...
-            min(sGr(grID(j)).ClusterID(:,2)),...
-            mean(sGr(grID(j)).ClusterID(:,2))];
-    end
-    if gr0
-        %get the locaiton of the force chain that must be removed
-        fcChk(i)=0;
-        continue
-    end
-    fc(i).ClustersVals=cat(1,sGr(grID).ClusterVal); %max - min - mean values
-    fc(i).ClustersID=unique(cat(1,sGr(grID).ClusterID),'rows'); %ClusterID - ClusterOrder
-    FcClData(i,:)=[fc(i).Length max(fc(i).ClustersVals(:,1)),...
-        min(fc(i).ClustersVals(:,2)),mean(fc(i).ClustersVals(:,3)),...
-        mean([sGr(grID).PrincipalStress])];
+    %get the cluster cells and add cluster order to it
+clCe=[cat(2,sc.Loops.sCells)'...
+    repelem(cat(1,sc.Loops.Order),cat(1,sc.Loops.nbCells),1)];
+    %Fc contacts
+fcCtc=cat(1,fc.Lines);
+    %get gC from DT
+gcDT=sc.DelaunayT(sc.GoodCells,:);
+    %check matching edges between FC and GC thus obtaining the cells that
+    %share a contact with the force chains
+chk=zeros(numel(sc.GoodCells),1);
+for i=1:6
+    chk=chk+ismember(gcDT(:,cb(i,:)),fcCtc,'rows');
 end
-fcChk=logical(fcChk);%turn into logical
+gcFC=sc.GoodCells(chk>1);
+    %get the order of these cells
+mb=ismember(clCe(:,1),gcFC);
+fcO=clCe(mb,2);
+    %count the number on each category knowing that the number of clusters
+    %of order 4 is the values not matched between clCe(:,1) and gcFC.
+%check cell per categories
+clCl4=numel(gcFC)-sum(mb);     %small
+clCl6=sum(fcO==6);             %submedium
+clCl8=sum((fcO>6 & fcO<22));   %medium
+clCl22=sum(fcO>20);            %large
 
-%remove data from the bad force chains
-FcClData=FcClData(fcChk,:); %remove 0 lines
-fc=fc(fcChk);               %delete bad fc
-idNew=sort(cat(1,fc.IDs));  %get the correct grain IDs
-clV=cat(1,sGr(ismember(idGr,idNew)).ClusterVal); %per grain cluster values
+%NFCC - non-force chain clusters are total minus FCC
+clCl4(2)=sc.Clt4.nbCells-clCl4;
+clCl6(2)=sum(C(O==6))-clCl6;            
+clCl8(2)=sum(C(O>6 & O<21))-clCl8;	
+clCl22(2)=sum(C(O>21))-clCl22;
 
-%vtk save
-vtkwrite(pathVTK(1)+"connectionsFC"+step+".vtk",'polydata',"LINESB",...
-    gr.Coord(:,1),gr.Coord(:,2),gr.Coord(:,3),cat(1,fc.Lines));
-vtkwrite(pathVTK(1)+"grainsFC"+step+".vtk",'unstructured_grid',...
-    gr.Coord(idNew,1),gr.Coord(idNew,2),gr.Coord(idNew,3),...
-    'SCALARS','Radius',gr.Radius(idNew),...
-    'SCALARS','MaxCl',clV(:,1),...
-    'SCALARS','MinCl',clV(:,2),...
-    'SCALARS','MeanCl',clV(:,3),...
-    'PRECISION',10);
+fcClCell2=cat(3,clCl4,clCl6,clCl8,clCl22);
+% Do the same but gettig all cells containing Fc grains
+    %get good cells contianig at least one FC grains
+gCgr=sc.GoodCells(sum(ismember(sc.DelaunayT(sc.GoodCells,:),cat(1,fc.IDs)),2)>0);
+%get the order of these cells
+mb=ismember(clCe(:,1),gCgr);
+fcO=clCe(mb,2);
+    %count the number on each category knowing that the number of clusters
+    %of order 4 is the values not matched between clCe(:,1) and gcFC.
+%check cell per categories
+clCl4=numel(gCgr)-sum(mb);     %small
+clCl6=sum(fcO==6);             %submedium
+clCl8=sum((fcO>6 & fcO<22));   %medium
+clCl22=sum(fcO>20);            %large
 
-%Cluster categories
-    %create an array containing ClID - ClOrder
-nbCl=numel(sc.Loops);nbCl4=sc.Clt4.nbCells;
-clGr=[(1:nbCl4+nbCl);
-    cat(2,sc.Loops.Order),ones(1,nbCl4)*4]';
-    %get unique Ids of Clusters in fc
-fcClIds=cat(1,fc.ClustersID);
-fcClIds=unique(fcClIds(:,1));
-    %Transform these Ids into logical position
-lgc(length(clGr))=false;
-lgc(fcClIds)=true;
-    %create a matrix where the first column is the cl in FC  and the other
-    %NFC ones.
-allCl=[clGr(:,2) clGr(:,2)];
-allCl(~lgc,1)=0;
-allCl(lgc,2)=0;
+%NFCC - non-force chain clusters are total minus FCC
+clCl4(2)=sc.Clt4.nbCells-clCl4;
+clCl6(2)=sum(C(O==6))-clCl6;            
+clCl8(2)=sum(C(O>6 & O<21))-clCl8;	
+clCl22(2)=sum(C(O>21))-clCl22;
 
-	%check categories
-cl4=sum(allCl==4,1);            %small
-cl6=sum(allCl==6,1);            %submedium
-cl8=sum(allCl>6 & allCl<21,1);	%medium
-cl22=sum(allCl>21,1);           %large
-    %concatenate them in third dimention so next step can go as next line
-clCat=cat(3,cl4,cl6,cl8,cl22);
-
-if app.FCGrVtkCBox.Value
-    fcGrainVTK(app,sc,cl4Id,nbCl,fc,gr,step,pathVTK(2))
-end
-
-end
+fcClCell3=cat(3,clCl4,clCl6,clCl8,clCl22);
+%}
 %}

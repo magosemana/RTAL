@@ -3,11 +3,51 @@ clc
 appLock(app,'UNLOCK');
 CalcPanel(app,'','','','off');
 
+% 
+% [fnm,fPath]=MatLoader('FORCEXT',app);
+% pD=load([fPath fnm]).pD;
+% clmnP=5;
+% Res=pD.Results;
+% qp=Res.Stress(:,clmnP-1)./Res.Stress(:,clmnP);
+% [~,mxpos]=max(qp);
+% step=Res.Step(mxpos);
+% gr=grains('STENSOR',step,'',app);
+% pgST=gr.PGStressTensor./permute((4*pi()/3)*gr.Radius.^3,[3,2,1]);
+% sGr(size(gr.Radius,1))=singleGrain(); %prepare singleGrain object array
+% nG=size(pgST,3); %nb of grains
+% for i=1:nG
+%     sGr(i)=basicInfo(sGr(i),i,-pgST(:,:,i),gr.Coord(i,:));
+% end
+% pStress=cat(1,sGr.PrincipalStress);
+% k=app.FCForceCoefEF.Value;
+% meanStr=k*mean(pStress(:,1));
+% 
+% vals.Mean=meanStr;
+% vals.PGStress=pStress;
+% vals.p=Res.Stress(mxpos,clmnP);
+% vals.q=Res.Stress(mxpos,clmnP-1);
+% 
+% step=Res.Step(end);
+% gr=grains('STENSOR',step,'',app);
+% pgST=gr.PGStressTensor./permute((4*pi()/3)*gr.Radius.^3,[3,2,1]);
+% sGr(size(gr.Radius,1))=singleGrain(); %prepare singleGrain object array
+% nG=size(pgST,3); %nb of grains
+% for i=1:nG
+%     sGr(i)=basicInfo(sGr(i),i,-pgST(:,:,i),gr.Coord(i,:));
+% end
+% pStress=cat(1,sGr.PrincipalStress);
+% k=app.FCForceCoefEF.Value;
+% meanStr=k*mean(pStress(:,1));
+% 
+% vals.MeanEnd=meanStr;
+% vals.PGStressEnd=pStress;
+% vals.pEnd=Res.Stress(end,clmnP);
+% vals.qEnd=Res.Stress(end,clmnP-1);
+% 
+% save("~/Documents/D50.mat",'vals','-v7.3');%save
 
-%step=266250;
-%pathSc=MakePath(app,'SCF');
-%scFnm=fullfile(pathSc,"LoopsSpaceCellsfile"+ step+".mat");
-%sc=load(scFnm).sc;
+
+%drawIndvLoops(3612500,[10,20,40,100],app)
 
 %gr=grains('BASIC',step,'',app);
 %sc = clusterVRangle(sc,gr);

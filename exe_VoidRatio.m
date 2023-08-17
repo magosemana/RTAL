@@ -25,26 +25,8 @@ function exe_VoidRatio(PD,app)
 if isequal(PD,'LOAD');voidLoad(app);return;end
 
 %get needed variables
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray);
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
+
 %file containing piston displacements
 TD=app.TrialData;
 if isempty(TD.Dz);return;end
@@ -68,7 +50,7 @@ if app.SubdivisionButton.Value==1
 else
     lMax=1;cMax=1;
     fnm=type+"VoidRatio"+N1+"to"+N2+"int"+interval+".mat";
-    Results=zeros(nbFiles,2,2);
+    Results=zeros(nbFiles,2,3);
 end
 
 app=CalcPanel(app,'',nbFiles,'Starting calculation','on');
@@ -97,9 +79,17 @@ for i=1:nbFiles
             %Second version of calculation, only taking into account
             %"goodCells" of spaceCellSystem object
             sc=spaceCellSystem("VR",stepArray(i),gr,app,'');
-            [~,vs,vv]=totalVoidRatio(sc,gr);
-            Results(i,:,2)=[vv/vs vv/(vs+vv)];
-            
+            [~,vS,vV]=totalVoidRatio(sc,gr);
+            Results(i,:,2)=[vV/vS vV/(vS+vV)];
+
+            %third version : compare "goodCells" void ratio with the
+            %boundary of center of cells => prove pavement property
+            [b,vt]=boundary(gr.Coord);
+            %identify grains in the borders
+            grBrdr=ismember(1:gr.Nb, unique(b));
+            vS=4/3*pi()*(sum(gr.Radius(grBrdr).^3)/2+sum(gr.Radius(~grBrdr).^3));
+            Results(i,:,3)=[(vt-vS)/vS vV/(vt)];
+
         case 'PARTIAL'
             %Partial 3D calcultions will be made in a similar way to the
             %total one. The volume of grains inide or partially inside the
@@ -236,10 +226,12 @@ else
     path=MakePath(app,'VOID');
 end
 png=".png";
+
 %fig=".fig";
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
 if app.LegendsCB.Value;leg=1;else;leg=0;end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 %Create Figures and Axis
 nb=3;
@@ -250,7 +242,11 @@ for i=1:(nb-1)
     f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on'); %#ok<LAXES>
 end
 
-C=app.PlotColors;
+if numel(pD)<8
+    C = app.PlotColors;
+else
+    C = graphClrCode(size(pD,2));%plot colorcode
+end
 crPt=zeros(numel(pD),2); %create a line passing through last pts
 for i=1:size(pD,2)
     res=pD(i).Results;
@@ -261,17 +257,24 @@ for i=1:size(pD,2)
     end
     for j=1:numel(pD(i).InfPts.q)
         optsA=[optsA,{'Pointx',pD(i).InfPts.ez(j)}]; %#ok<*AGROW>
-        optsB=[optsB,{'Pointx',log10(pD(i).InfPts.p(j))}];
+        optsB=[optsB,{'Pointx',pD(i).InfPts.p(j)}];
     end
-    %Turn values in seconds
+    %CALCULATION WITH PISTON DATA
     plotMark(app,ax(1),res.Strain,res.VoidRatio(:,1,1),optsA{:}) % voidratio = f(Ez)
     plotMark(app,ax(2),res.Strain,res.VoidRatio(:,2,1),optsA{:}) % porosity = f(Ez)
-    plotMark(app,ax(3),log10(res.Pressure),res.VoidRatio(:,1,1),optsB{:})   % voidratio = f(log(p))
-    crPt(i,:)=[log10(res.Pressure(end)),res.VoidRatio(end,1,1)];
+    plotMark(app,ax(3),res.Pressure,res.VoidRatio(:,1,1),optsB{:})   % voidratio = f(log(p))
+    crPt(i,:)=[res.Pressure(end),res.VoidRatio(end,1,1)];
     if size(pD,2)>1;k=1;else;k=0;end
+    %CALCULATIONS THROUGH DELAUNAY TRIANGULATION
     plotMark(app,ax(3*k+1),res.Strain,res.VoidRatio(:,1,2),optsA{:}) % voidratio = f(Ez)
     plotMark(app,ax(3*k+2),res.Strain,res.VoidRatio(:,2,2),optsA{:}) % porosity = f(Ez)
-    plotMark(app,ax(3*k+3),log10(res.Pressure),res.VoidRatio(:,1,2),optsB{:})   % voidratio = f(log(p))
+    plotMark(app,ax(3*k+3),res.Pressure,res.VoidRatio(:,1,2),optsB{:})   % voidratio = f(log(p))
+    %THIRD CALCULATION
+    if k==0
+        plotMark(app,ax(3*k+1),res.Strain,res.VoidRatio(:,1,3),optsA{:}) % voidratio = f(Ez)
+        plotMark(app,ax(3*k+2),res.Strain,res.VoidRatio(:,2,3),optsA{:}) % porosity = f(Ez)
+        plotMark(app,ax(3*k+3),res.Pressure,res.VoidRatio(:,1,3),optsB{:})   % voidratio = f(log(p))
+    end
     
 end
 if leg
@@ -282,14 +285,15 @@ if leg
         end
     else
         for j=1:nb
-            legend(ax(j),'Whole specimen','Good Cells','location','best')
+            legend(ax(j),'Whole specimen','Cell','Boundary','location','best')
         end
     end
 end
 if size(pD,2)>2
     %if more than two files, create a fitted line through the end points -
-    %tring to simulate the critical state
-    ft=fit(crPt(:,1),crPt(:,2),'poly1');
+    %tring to simulate the critical state. Fit line as a log because it p
+    %will be turned into log scale later.
+    ft=fit(crPt(:,1),crPt(:,2),fittype('a*log10(x)+b'));
     axes(ax(3))
     p=plot(ft,'--k',crPt(:,1),crPt(:,2));
     p(2).LineWidth=1;
@@ -329,7 +333,8 @@ i=i+1;
 %plot3 VR=f(log(p))
 if tit;title(ax(i),'Void ratio in function of log(p)');end
 ylabel(ax(i),'Void Ratio')
-xlabel(ax(i),'log(p)')
+xlabel(ax(i),'Mean pressure')
+ax(i).XScale='log';
 if size(pD,2)>1;ax(i).YLim=lm(i,:);end
 fnm="VoidRatio_LogP";
 saveas(f(i),fullfile(path,fnm+png));
@@ -357,7 +362,8 @@ if numel(pD)>1
     %plot3 VR=f(log(p))
     if tit;title(ax(i),'Void ratio in function of log(p)');end
     ylabel(ax(i),'Void Ratio')
-    xlabel(ax(i),'log(p)')
+    xlabel(ax(i), 'Mean Pressure')
+    ax(i).XScale='log';
     if size(pD,2)>1;ax(i).YLim=lm(i-3,:);end
     fnm="VoidRatio_GC_LogP";
     saveas(f(i),fullfile(path,fnm+png));

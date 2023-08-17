@@ -128,6 +128,22 @@ switch upper(type)
         else
             rData=[rData;rData2];
         end
+    case 'PISTONSYADE'
+        fnm=fullfile(pth,app.PistEF.Value +""+ app.FormatEF.Value);
+        %load file
+        try opts = detectImportOptions(fnm);
+        catch
+            warndlg(['File could not be found. Try changing inputs'...
+                ' or the name of the folder they files are found']);
+            return;
+        end
+        opts.VariableNames={'Step','Sigx','Sigy','Sigz','Uz','Uy1',...
+            'Uy2','Ux1','Ux2'};
+        opts.DataLines = 3;
+        tab = readtable(fnm,opts);
+        rData=tab{:,:};
+        rData=sortrows(rData);
+
     otherwise
         warndlg('Wrong readData Type');return;
 end

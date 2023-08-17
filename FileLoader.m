@@ -31,10 +31,10 @@ if fPath==0;pD='';return;end
 switch class(fnm)
     case 'char' %one file selection
         %Load Results
-        opts = detectImportOptions([fPath fnm],'NumHeaderLines',8);
+        opts = detectImportOptions(fullfile(fPath,fnm),'NumHeaderLines',8);
         opts.Delimiter='|';
         opts.VariableNamesLine = 9;
-        Table = readtable([fPath fnm],opts);
+        Table = readtable(fullfile(fPath,fnm),opts);
         
         for i=1:size(Table,2)%count how many columns of data we have
             if isnan(Table{1,i}) || ~isequal(class(Table{1,i}),'double')
@@ -49,12 +49,12 @@ switch class(fnm)
         file=Table{1:end,1:i};
 
         %Load other information
-        opts2 = detectImportOptions([fPath fnm],'NumHeaderLines',1);
+        opts2 = detectImportOptions(fullfile(fPath,fnm),'NumHeaderLines',1);
         opts2.Delimiter='|';
         opts2.DataLines=[3 7];
         opts2.VariableNames = {'A','B','C'};
         opts2 = setvartype(opts2,{'double'});
-        Table2 = readtable([fPath fnm],opts2,'ReadVariableNames',false);
+        Table2 = readtable(fullfile(fPath,fnm),opts2,'ReadVariableNames',false);
         file2=Table2{1:5,1:3};
         
         %remove format from the file name
@@ -103,11 +103,11 @@ switch class(fnm)
         pD=plotData.empty(NbFiles,0);
         for i=1:NbFiles
             %Load file
-            opts = detectImportOptions([fPath fnm{i}],'NumHeaderLines',8);
+            opts = detectImportOptions(fullfile(fPath,fnm{i}),'NumHeaderLines',8);
             opts.Delimiter='|';
             opts.VariableNamesLine = 9;
             opts.VariableNamingRule='preserve';
-            Table = readtable([fPath fnm{i}],opts);
+            Table = readtable(fullfile(fPath,fnm{i}),opts);
             
             for j=1:size(Table,2)%count how many columns of data we have
                 if ~isequal(class(Table{1,j}),'double')
@@ -125,12 +125,12 @@ switch class(fnm)
             file=Table{1:end,1:j};
             
             %Load other information
-            opts2 = detectImportOptions([fPath fnm{i}],'NumHeaderLines',1);
+            opts2 = detectImportOptions(fullfile(fPath,fnm{i}),'NumHeaderLines',1);
             opts2.Delimiter='|';
             opts2.DataLines=[3 7];
             opts2.VariableNames = {'A','B','C'};
             opts2 = setvartype(opts2,{'double'});
-            Table2 = readtable([fPath fnm{i}],opts2);
+            Table2 = readtable(fullfile(fPath,fnm{i}),opts2);
             file2=Table2{1:5,1:3};
             
             %remove format from the file name

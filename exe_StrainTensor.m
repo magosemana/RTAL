@@ -11,7 +11,7 @@ function exe_StrainTensor(app,type,PD)
 %Chose the time of calculation following TYPE
 switch upper(type)
     case 'LOAD'
-        strainLoad(app);return;
+        strainLoad(app,PD);return;
     case 'GLOBAL'
         calcType=1;
     case 'PERCELL'
@@ -34,26 +34,10 @@ else
 end
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1+interval:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray)-1;
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
+%strain is the relative deformation between two steps, thus the nb of
+%calculations is given by :
+nbFiles=nbFiles-1;
 
 %Check if 3d or 2D
 if app.Bool3D;D=3;else; D=2;end
@@ -67,32 +51,48 @@ if ismember(1,calcType)
         Results=zeros(nbFiles,D+3,nbSub); %Step Ex Ey Ez Ed Ev
     end
 end
+
 %Prepare PERCELL values
 if ismember(2,calcType) 
-    %creating a folder for the outputfiles (vtk)
-    pathVTK=MakePath(app,'Strain')+"ShearBandsVTK"+N1+"to"+N2+"int"+...
-        interval+"/";
-    if exist(pathVTK,'dir')==0;mkdir(pathVTK);end
+    %creating a folder for the outputfiles (vtk) if vtk files were asked
+    if app.StnVTKCB.Value
+        pathVTK=MakePath(app,'Strain')+"ShearBandsVTK"+N1+"to"+N2+"int"+...
+            interval+"/";
+        if exist(pathVTK,'dir')==0;mkdir(pathVTK);end
+    end
     % values calculated are incremental, thus will be cumulated in the
     % following vectors,
     pgEd=zeros(1,1,app.NbGrains);
     W2=zeros(1,1,app.NbGrains);
-    %W2 and cluster calculation
-    if app.StTW2ClCB.Value
-        nbW2Gr=zeros(nbFiles,1);
-        clW2Cat=zeros(nbFiles,4,2);
+    %Cluster and strain calculation
+    if app.StnClusterCB.Value
+        resClStr=zeros(2000,nbFiles,2);
     end
     %Prepare per grain inertia calculation
     itvArray=stepArray(2:end)-stepArray(1:end-1);
     I=cell(nbFiles,1);
+
+    %Try loading per grain average cluster value
+    aveCl=0;
+    fnm=fullfile(MakePath(app,'LOOPAC'),"Average_Cluste_pGrain_"+N1+"to"+N2+"int"+interval+".txt");
+    if isfile(fnm)
+        %Prepare a matrix that will contain the aveCluster and W2 values
+        %for each grain
+        pgRes=zeros(app.NbGrains,nbFiles,2);
+        aveCl=1;
+        opts = detectImportOptions(fnm,'NumHeaderLines',4);
+        opts.Delimiter='|';
+        opts.VariableNamesLine = 5;
+        Table = readtable(fnm,opts);
+        pgRes(:,:,2)=Table{2:end,3:end};
+    end
 end
 
 %Load first object containing grains data
-grOld=grains('STENSOR',stepArray(1),'',app);
-if isempty(grOld.Coord)
+[grT,PDT]=grains('STENSOR',stepArray(1),PD,app);
+if isempty(grT.Coord)
     warndlg(['gr.Coord is empty on step ' N1]);return;
 end
-stepArray=stepArray(2:end);
 
 %create path
 pathSc=MakePath(app,'SCF');
@@ -105,34 +105,37 @@ for i=1:(nbFiles)
         CalcPanel(app,'','','','off');
         warndlg('Calculation was canceled');return
     end
-    step=stepArray(i);
+    stepT=stepArray(i);
+    stepTdT=stepArray(i+1);
     
     if isa(app.CalculatingPanel,'double')
         app=CalcPanel(app,i,nbFiles,"NEWLINE");
     else
-        app=CalcPanel(app,i,nbFiles,step);
+        app=CalcPanel(app,i,nbFiles,stepTdT);
     end
     %Load second object containing grains data
-    [grNew,PD]=grains('STENSOR',step,PD,app);
-    if isempty(grNew.Coord)
+    [grTdT,PDTdT]=grains('STENSOR',stepTdT,PD,app);
+    if isempty(grTdT.Coord)
         CalcPanel(app,'','','','off');
-        warndlg(['Gr.Coord is empty on step ' step]);return;
+        warndlg(['Gr.Coord is empty on step ' stepTdT]);return;
     end
     
     %check if spaceCell file exist from a previous execution. If not launch
     %the calculation
-    fl=[pathSc char("spaceCellsfile"+step+"int"+interval+".mat")];
+    fl=[pathSc char("spaceCellsfile"+stepTdT+"int"+interval+".mat")];
     if isfile(fl)
         %fprintf('Space cell %d file found and loaded \n',step)
         sc=load(fl).sc;sv=0;
     else
-        sc = spaceCellSystem(type,step,grNew,grOld,app,PD);sv=1;
+        %Strain calculation should be made using the displacement between
+        %T-TdT of the grain located in T
+        sc = spaceCellSystem(type,stepArray(i),grTdT,grT,app,PDT);sv=1;
     end
     
     %GLOBAL CALCULATION
     if ismember(1,calcType)
         %check if the tensor exists or need to be calculated
-        sc=gStrainTensor(sc,app,PD);
+        sc=gStrainTensor(sc,app,PDT);
         %calculate total volume and save values into matrix
         if ~app.SubdivisionButton.Value
             %divide the strain value by hte volume of the previus step.
@@ -141,11 +144,11 @@ for i=1:(nbFiles)
             if isempty(V_old);V_old=sum(sc.CellVol);end 
             stG(:,:,1)=(sc.GStTensor)/V_old;
             stG(:,:,2)=sum(sc.CellStn,3)/V_old;
-            Results(i,1,3)=step;
+            Results(i,1,3)=stepTdT;
             tri=2;
             V_old=sum(sc.CellVol);
         else
-            [~,V_sub]=getVolume(app.TrialData,app,(step),PD); %v of previous step
+            [~,V_sub]=getVolume(app.TrialData,app,(stepTdT),PDT); %v of previous step
             stG=(sc.GStTensor)./permute(V_sub,[3,2,1]);
             tri=size(Results,3);
         end
@@ -158,13 +161,13 @@ for i=1:(nbFiles)
                 6*stG(1,2,1:tri).^2+...                    % 3*(sig12)^2
                 6*stG(1,3,1:tri).^2+...                    % 3*(sig13)^2pcq
                 6*stG(2,3,1:tri).^2 )/2);                  % 3*(sig23)^2
-            Results(i,:,1:tri)=[ones(1,1,tri)*step...
+            Results(i,:,1:tri)=[ones(1,1,tri)*stepTdT...
                 -[stG(1,1,1:tri) stG(2,2,1:tri) stG(3,3,1:tri) iEv ] iEd ]; %- for negative compression, GC standart
         else
             iEv=(stG(1,1,1:tri)+stG(2,2,1:tri));
             iEd=sqrt(( (stG(1,1,:)-stG(2,2,:)).^2+...     %(sig1-sig2)^2
                 6*stG(1,2,:).*stG(1,2,:) )/2);          % 2*(sig12)^2
-            Results(i,:,1:tri)=[ones(1,1,tri)*step...
+            Results(i,:,1:tri)=[ones(1,1,tri)*stepTdT...
                 -[stG(1,1,1:tri) stG(2,2,1:tri) iEv ] iEd ]; %- for negative compression
         end
     end
@@ -177,13 +180,14 @@ for i=1:(nbFiles)
         end
         %Second order work. Per element ultiply the incremental strain and
         %stress. Then trainsform it from a 3x3xNbg to Nbgx1 by sum and
-        %permtute
-        incW2=(grNew.PGStressTensor-grOld.PGStressTensor).*sc.PStTensor;
-        incW2=permute(sum(incW2,1:2),[3,1,2]);%./(grNew.Radius.^3*4/3*pi()); remove the volume division for now
+        %permtute. PGStressTensor should be divided by vol of the sphere to
+        %return the correct unity for W2
+        incW2=(grTdT.PGStressTensor-grT.PGStressTensor).*sc.PStTensor;
+        incW2=permute(sum(incW2,1:2),[3,1,2]);%./(grT.Radius.^3*4/3*pi()); remove the volume division for now
         W2=W2+incW2;
         %calculate the cumulated strain
         iSTG=sc.PStTensor;  %incr grain strain (BAGI96)
-        iSTC=sc.CellStn;   %incr cell strain (Interpolation)
+        iSTC=sc.CellStn;    %incr cell strain (Interpolation)
         %Calculate the incremental deviatoric values
         if app.Bool3D % check existence of x direction piston
             iEd=sqrt(((iSTG(1,1,:)-iSTG(2,2,:)).^2+...
@@ -212,31 +216,41 @@ for i=1:(nbFiles)
         %divide by cell volume
         iEdC=pagemtimes(iEdC,1./sc.CellVol); 
 
-        cord=grNew.Coord;
-        r=grNew.Radius;
-        if isempty(PD)
-            %ind=find(~isnan(sc.GrainVolume));
-            ind=1:sc.NbG;
-        else
-            ind=PD.GrainsRectangle;
+        %Extra calculation : Cluster and second order work realtion
+        if app.StnClusterCB.Value
+            rClStr=cellStrainCluster(app,stepT, sc, iEdC);
+            if isempty(rClStr);return;end
+            resClStr(1:size(rClStr,1),i,:)=rClStr;
         end
         
-        
-        
+        cord=grT.Coord;
+        r=grT.Radius;
+        if aveCl
+            %IF average cluste file was found, save per grain W2 results
+            pgRes(:,i,1)=incW2;
+        end
+                
         %Calculate the intertial number to verify if we still are in the
         %quasi-static regime
-        P=permute(abs(grNew.PGStressTensor(1,1,:)+...
-            grNew.PGStressTensor(2,2,:)+...
-            grNew.PGStressTensor(3,3,:))/3,[3,2,1]);
+        P=permute(abs(grT.PGStressTensor(1,1,:)+...
+            grT.PGStressTensor(2,2,:)+...
+            grT.PGStressTensor(3,3,:))/3,[3,2,1]);
         V=4/3*pi()*r.^3;
         I{i}=permute(iEd,[3,2,1])/(itvArray(i)*app.TimeStep)...
             .*sqrt(2600*V.^2./(P.*(2*r)));
-        %save as vtk file
-        if ~app.SubdivisionButton.Value
+        %save as vtk file -- skip plot if asked
+        if ~app.SubdivisionButton.Value && app.StnVTKCB.Value
             %%%%% GRAIN VTK FILE %%%%
                 %remove positive values and calculate a 90% negative
                 %percentile of the values to be ploted. Thus a scale will
                 %be created.
+
+            if isempty(PDT)
+                %ind=find(~isnan(sc.GrainVolume));
+                ind=1:sc.NbG;
+            else
+                ind=PDT.GrainsRectangle;
+            end
             pW2=W2;pW2(pW2>0)=0;
             k=sort(pW2);k(k==0)=[];
             k=k(max(floor(0.01*numel(k)),1));
@@ -249,15 +263,23 @@ for i=1:(nbFiles)
             incpW2=incpW2/abs(k);
             incpW2(incpW2<-1)=-1;
             
-            newFile=pathVTK+prefix+"ShearBand"+step+".vtk";
-            vtkwrite(newFile,'unstructured_grid',...
-                cord(ind,1),cord(ind,2),cord(ind,3),...
-                'SCALARS','Radius',r(ind),...
+            %prepare Scalar data
+            svData={'SCALARS','Radius',r(ind),...
                 'SCALARS','Dev_Str',pgEd(ind),...
                 'SCALARS','Dev_Str_Rat',pgEd(ind)/max(pgEd(ind)),...
                 'SCALARS','Dev_Str_Inc',iEd(ind),...
                 'SCALARS','W2',pW2(ind),...
-                'SCALARS','W2_Inc',incpW2(ind),...
+                'SCALARS','W2_Inc',incpW2(ind)};
+
+            if aveCl
+                %Add ave cluster
+                svData={svData,'SCALARS','W2_Inc',pgRes(ind,i,2)}; %#ok<AGROW>
+            end
+
+            newFile=fullfile(pathVTK,prefix+"ShearBand"+stepTdT+".vtk");
+            vtkwrite(newFile,'unstructured_grid',...
+                cord(ind,1),cord(ind,2),cord(ind,3),...
+                svData{:},...
                 'PRECISION',10,'BINARY');
             %'SCALARS','DevStrainRatio',pcEv(ind)/max(pcEv(ind)),...
             
@@ -267,14 +289,16 @@ for i=1:(nbFiles)
             cv=cat(1,sc.CellVol);
             cv=(cv<mean(cv)^2/max(cv));
             iEdC(cv)=0;
+            %get value that represents  99% of cells and turn into the max
+            %value
             k=sort(iEdC);
             k=k(floor(0.99*numel(k)));
             iEdC=iEdC/abs(k);
             iEdC(iEdC>1)=1;
                 %calculate per cell VR
-            [vr,~,~]=perCellVoidRatio(sc,grNew);
+            [vr,~,~]=perCellVoidRatio(sc,grT);
                 %prepare to create vtk files
-            newFile=pathVTK+prefix+"ShearBandCell"+step+".vtk";
+            newFile=fullfile(pathVTK,prefix+"ShearBandCell"+stepTdT+".vtk");
             cGr=sc.CellGrn; %grain ditribution per cell
             cmb=nchoosek(1:(D+1),D);
             tri=cat(1,cGr(:,cmb(1,:),:),cGr(:,cmb(2,:),:),...
@@ -286,30 +310,28 @@ for i=1:(nbFiles)
                 cord(:,1),cord(:,2),cord(:,3),tri,...
                 'facescalar',2,"Dev_Str_Inc",iEdC,...
                 "Void_Ratio",vr);
-        else
+        elseif app.StnVTKCB.Value
             for l=1:lMax
                 for tri=1:cMax
                     j=tri+cMax*(l-1);
-                    if ismember(2,calcType)
-                        newFile=pathVTK+prefix+"ShearBandl"+l+"c"+tri+"-"+step+".vtk";
-                        vtkwrite(newFile,'unstructured_grid',...
-                            cord(PD.SubGrains{j},1),cord(PD.SubGrains{j},2),cord(PD.SubGrains{j},3),...
-                            'SCALARS','Radius',r(PD.SubGrains{j}),...
-                            'SCALARS','Dev_Strain',Ed(PD.SubGrains{j}),...
-                            'SCALARS','Dev_Strain_Inc',iEd(PD.SubGrains{j}),...
-                            'SCALARS','Dev_Strain_Ratio',Ed(PD.SubGrains{j})/mean(Ed(PD.SubGrains{j})),...
-                            'SCALARS','SecOrderWork',incW2(PD.SubGrains{j}),...
-                            'PRECISION',10,'BINARY');
+                    %prepare Scalar data
+                    svData={'SCALARS','Radius',r(PDT.SubGrains{j}),...
+                        'SCALARS','Dev_Strain',Ed(PDT.SubGrains{j}),...
+                        'SCALARS','Dev_Strain_Inc',iEd(PDT.SubGrains{j}),...
+                        'SCALARS','Dev_Strain_Ratio',Ed(PDT.SubGrains{j})/mean(Ed(PDT.SubGrains{j})),...
+                        'SCALARS','SecOrderWork',incW2(PDT.SubGrains{j})};
+
+                    if aveCl
+                        %Add ave cluster
+                        svData={svData,'SCALARS','W2_Inc',pgRes((PDT.SubGrains{j}),i,2)}; %#ok<AGROW>
                     end
+                    newFile=fullfile(pathVTK,prefix+"ShearBandl"+l+"c"+tri+"-"+stepTdT+".vtk");
+                    vtkwrite(newFile,'unstructured_grid',...
+                        cord(PDT.SubGrains{j},1),cord(PDT.SubGrains{j},2),cord(PDT.SubGrains{j},3),...
+                        svData{:},...
+                        'PRECISION',10,'BINARY');
                 end
             end
-        end
-        %Extra calculation : Cluster and second order work realtion
-        if app.StTW2ClCB.Value
-            [nbGr,clW2Gr]=w2Cluster(app,step,incW2);
-            if isempty(nbGr);return;end
-            nbW2Gr(i)=nbGr;
-            clW2Cat(i,:,:)=clW2Gr;
         end
     end
     %Save SC in a file for a faster re execution if needed
@@ -317,14 +339,15 @@ for i=1:(nbFiles)
         sc=purge(sc,'Strain');
         save(fl,'sc','-v7.3');
     end
-    %grNew becomes the next grOld
-    grOld=grNew;
+    %grTdT becomes the next grT
+    grT=grTdT;
+    PDT=PDTdT;
 end
 CalcPanel(app,i+1,nbFiles,'','off');
 
 if ismember(2,calcType) && app.SubdivisionButton.Value
-    %write down the subdivision selection as a vtk for easier analysis
-    v=PD.SubVertices;
+    %Create VTK lines separating the subdvision for better analysis
+    v=PDT.SubVertices;
     pt=zeros(size(v,3)*2,3);    %contain the points
     cnct=zeros(size(v,3),2);  %contain the connection scheeme
     for i=1:size(v,3)
@@ -341,7 +364,7 @@ if ismember(2,calcType) && app.SubdivisionButton.Value
             +0.075,uV(2,:)];
         cnct(i,:) =[1 2]+(i-1)*2;
     end
-    fnm=pathVTK+"subdivisionsLines.vtk";
+    fnm=fullfile(pathVTK,"subdivisionsLines.vtk");
     vtkwrite(fnm,'polydata',"LINESB",pt(:,1),pt(:,2),pt(:,3),cnct);
 end
 
@@ -383,132 +406,178 @@ if ismember(1,calcType)
 end
 %create vtk state variables file
 if ismember(2,calcType)
-    fnm=pathVTK+"vtkVariables.txt";
+    fnm=fullfile(pathVTK,"vtkVariables.txt");
+    stepArray=stepArray(2:end);
     stress = extStress(app.TrialData,stepArray,app);
     strain = extStrains(app.TrialData,stepArray,N1,app,'allCalc');
     StepEzEvQP=[stepArray,strain(:,[D,D+1]),stress(:,end-1:end)];
     vtkLog(app,'FCbase',fnm,StepEzEvQP)
-end
-if app.StTW2ClCB.Value
-    %Cluster and Second order work results
-    w2Res.Nb=nbW2Gr/app.NbGrains;
-    w2Res.Cluster=clW2Cat;
-    strain= extStrains(app.TrialData,stepArray,N1,app);
-    w2Res.Strain=strain(:,D);
-    w2Res.InfPts=app.TrialData.InfPts;
-    %create plotData object
-    pD = plotData("Normal",w2Res,app,'',consoStrain(end));
-    %save pD object
-    fl=MakePath(app,'LOOPW2')+"Striain-ClW2"+N1+"to"+N2+"int"+interval+".mat";
-    save(fl,'pD','-v7.3');
-    %go to plot
-    w2ClustPlotter(app,pD);
+
+    if aveCl
+        acRes.Strain=strain(:,D);
+        acRes.Stress=stress(:,end);
+        acRes.W2=pgRes(:,:,1);
+        acRes.AveCluster=pgRes(:,:,2);
+        pD = plotData("Normal",acRes,app,'',consoStrain(end));
+        fl=fullfile(MakePath(app,'STNW2AC'),"Strain-ClW2"+N1+"to"+N2+"int"+interval+".mat");
+        save(fl,'pD','-v7.3');
+        %go to plot
+        aveClW2Plotter(app,pD);
+    end
+    if app.StnClusterCB.Value
+        %Cluster and Second order work results
+        stnCl.SC = resClStr;
+        stnCl.Strain = strain(:,D);
+        stnCl.Stress = stress(:,end);
+        %create plotData object
+        pD = plotData("Normal",stnCl,app,'',consoStrain(end));
+        %save pD object
+        fl=fullfile(MakePath(app,'STNCL'),"Strain-Cl"+N1+"to"+N2+"int"+interval+".mat");
+        save(fl,'pD','-v7.3');
+        %go to plot
+        strainClustPlotter(app,pD);
+    end
 end
 end
 %execution function
-function [nbW2Gr,clW2Gr]=w2Cluster(app,step,W2)
-%W2CLUSTER Calculates the clusters near negative W2 values
-
-clW2Gr=zeros(1,4,2);
+function resClStr=cellStrainCluster(app,step, scStn, iEdC)
 %Load Cluster data
 scFnm=[app.SavePath '/MatlabResultsFile/SpaceCellFiles/'...
     char("LoopsSpaceCellsfile"+step+".mat")];
-try sc=load(scFnm).sc;
+try scClu=load(scFnm).sc;
 catch
     fprintf(['No Loops spacecell files, '...
         'please run loops calculation beforehand.'])
-    nbW2Gr='';clW2Gr='';return
+    resClStr='';return
 end
 
-%create a 3 column 2D matrix containing the ID of the cluster, the order
-%and each grain. So for every grain of each Cluster the first two elements
-%of the line is the same.  %ClusterID - ClusterOrder - grID
-Cl=numel(sc.Loops);
-clGr=repelem([(1:Cl)',cat(1,sc.Loops.Order)],cat(1,sc.Loops.Size),1);
-clGr=[clGr cat(1,sc.Loops.Grains)];
+%%% Prepare strain Data
+%Inc dev strain of cell with too low volume will be removed from
+%calculation - ratio (min vol)/(mean vol) should be the same as
+%(mean)/(max)
+cv=cat(1,scStn.CellVol);
+cv=(cv<mean(cv)^2/max(cv));
+iEdC(cv)=0;
+%get value that represents  99% of cells and turn into the max
+%value
+k=sort(iEdC);
+k=k(floor(0.99*numel(k)));
+iEdC=iEdC/abs(k);
+%transform from a 1x1xN to Nx1x1
+iEdC=permute(iEdC,[3,2,1]);
 
-%do the same for the Cluster4 category %ClusterID - grID
-cl4Id=sc.GoodCells(~ismember(sc.GoodCells,cat(2,sc.Loops.sCells)')); %id Cl4 cell location
-clGr4=repelem((1+Cl):(numel(cl4Id)+Cl),4)'; %create ClusterID starting from L+1
-clGr4=[clGr4 reshape(sc.DelaunayT(cl4Id,:)',[numel(cl4Id)*4,1]) ];
+%%% Prepare Cluster data
+gC=scClu.GoodCells;
+if isempty(gC)
+    gC = goodCell(scClu);
+end
+%Get clusters cells
+cC=cat(2,scClu.Loops.sCells)';
+%Transform them into goodcell Ids
+[~,cC]=ismember(cC,gC);
+%add cluster order to it
+clCe=[cC repelem(cat(1,scClu.Loops.Order),cat(1,scClu.Loops.nbCells),1)];
+%add cluster 4s
+clCe=sortrows([clCe;[cat(1,scClu.Clt4.sCells) 4*ones(scClu.Clt4.nbCells,1)]]);
 
-%Get both matrixes in one vector
-clGr = [clGr;clGr4(:,1) ones(length(clGr4),1)*4 clGr4(:,2)];  %ClusterID - ClusterOrder - grID
+maxO=max(cat(1,scClu.Loops.Order));
 
-%Get ID of negative W2 grains
-id=find(W2<0);
-nbW2Gr=numel(id); %nb of negative W2 grains
-%get cl IDs of grains in contact to negative W2 grains
-pos=ismember(clGr(:,3),id);
-clW2id=unique(clGr(pos,1:2),'rows'); %ClusterID - ClusterOrder
-cl=clW2id(:,2);
-    %count categories
-clW2Gr(1,:,1)=sum([cl==4,cl==6,(cl>6 & cl<21),cl>21],1);
-%nb of non W2 clusters = total - w2clusters
-cl=cat(1,sc.Loops.Order);
-clW2Gr(1,:,2)=[sc.Loop4,sum([cl==6,cl>6 & cl<21,cl>21],1)]...
-    -clW2Gr(1,:,1);
+%prepare results vector : count how many cells of each order are above or
+%below the dev stn limit
+stnL=.10*abs(k);
+resClStr=zeros(maxO/2,1,2);
+for i=1:2
+    %get cells above or below dev strain limit
+    if i==1
+        chk=iEdC>=stnL;
+    else
+        chk=iEdC<stnL;
+    end
+    %get clusters of these cells
+    cls=clCe(chk,2);
+    %count repetitions
+    cls=accumarray(cls,ones(size(cls)));
+    %save into results
+    resClStr(1:size(cls,1)/2,:,i)=cls(2:2:size(cls,1));
+end
+
+
 end
 %load functions
-function strainLoad(app)
+function strainLoad(app,type)
 %STRAINLOAD Loader for the strain function
-
-if app.StTW2ClCB.Value
-    bsPth=MakePath(app,'LOOPW2','check');
-    if exist(bsPth,'dir')==0
-        fprintf('Cluster W2 usual path not found \n')
-        bsPth='';
-    end    
-    [fnm,Path,~] = uigetfile( ...
-        {'*.mat','Matlab files(*.mat)';'*.*',  'All Files (*.*)'},...
-        'Select file for loading','Multiselect','on',bsPth);
-    if Path==0
-        warndlg('No files were chosen, Try again.')
-    else
-        pD=load([Path fnm]).pD;
-        w2ClustPlotter(app,pD)
-    end
-    return
-end
-
-%Load file
-[fnm,fPath]=MatLoader('STRAIN',app);
-if fPath==0;return;end
-if iscell(fnm)
-    pD=plotData.empty(0,1);
-    mode='MULTI';
-    for i=1:numel(fnm)
-        try pD(i)=load(fullfile(fPath,fnm{i})).pD;
-        catch
-            warndlg(['File ' fnm{i} ' not found or does not cointain '...
-                '"pD" property, Try again.']);return
+switch upper(type)
+    case 'STRAIN'
+        %Load file
+        [fnm,fPath]=MatLoader(type,app);
+        if fPath==0;return;end
+        if iscell(fnm)
+            pD=plotData.empty(0,1);
+            mode='MULTI';
+            for i=1:numel(fnm)
+                try pD(i)=load(fullfile(fPath,fnm{i})).pD;
+                catch
+                    warndlg(['File ' fnm{i} ' not found or does not cointain '...
+                        '"pD" property, Try again.']);return
+                end
+                if isempty(pD(i).FileName)
+                    nm=fnm{i};
+                    pD(i).FileName=nm(1:find(nm=='.')-1);
+                end
+            end
+        else
+            pD=load(fullfile(fPath,fnm)).pD;
+            if size(pD.Results,3)<4
+                mode='NORMAL';
+            else
+                mode='SUBD';
+            end
         end
-        if isempty(pD(i).FileName)
-            nm=fnm{i};
-            pD(i).FileName=nm(1:find(nm=='.')-1);
-        end
-    end
-else
-    pD=load(fullfile(fPath,fnm)).pD;
-    if size(pD.Results,3)<4
-        mode='NORMAL';
-    else
-        mode='SUBD';
-    end
-end
 
-%Plot
-if numel(pD)==1
-    strainPloter(app,mode,pD)
-else
-    fprintf('Executing many\n')
-    for i=1:numel(pD)
-        mode='NORMAL';
-        path=fullfile(MakePath(app,'STRAIN'),pD(i).FileName);
-        if exist(path,'dir')==0;mkdir(path);end
-        strainPloter(app,mode,pD(i),path)
-    end
-    fprintf('Done\n')
+        %Plot
+        if numel(pD)==1
+            strainPloter(app,mode,pD)
+        else
+            fprintf('Executing several plots\n')
+            for i=1:numel(pD)
+                mode='NORMAL';
+                path=fullfile(MakePath(app,'STRAIN'),pD(i).FileName);
+                if exist(path,'dir')==0;mkdir(path);end
+                strainPloter(app,mode,pD(i),path)
+            end
+            fprintf('Done\n')
+        end
+    case 'STNCL'
+        bsPth=MakePath(app,type,'check');
+        if exist(bsPth,'dir')==0
+            fprintf('Strain-Cluster usual path not found \n')
+            bsPth='';
+        end
+        [fnm,Path,~] = uigetfile( ...
+            {'*.mat','Matlab files(*.mat)';'*.*',  'All Files (*.*)'},...
+            'Select file for loading','Multiselect','on',bsPth);
+        if Path==0
+            warndlg('No files were chosen, Try again.')
+        else
+            pD=load(fullfile(Path,fnm)).pD;
+            strainClustPlotter(app,pD)
+        end
+    case 'STNW2AC'
+        bsPth=MakePath(app,type,'check');
+        if exist(bsPth,'dir')==0
+            fprintf('Average cluster W2 usual path not found \n')
+            bsPth='';
+        end
+        [fnm,Path,~] = uigetfile( ...
+            {'*.mat','Matlab files(*.mat)';'*.*',  'All Files (*.*)'},...
+            'Select file for loading','Multiselect','on',bsPth);
+        if Path==0
+            warndlg('No files were chosen, Try again.')
+        else
+            pD=load(fullfile(Path,fnm)).pD;
+            aveClW2Plotter(app,pD)
+        end
+
 end
 
 end
@@ -528,6 +597,7 @@ if isequal(upper(mode),'SUBD')
     SubPlotter(app,'STRAIN',pD.Results.Strain,labels,pD.ConsoTime,subV);
     return;
 end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 %Check title and legends option
 if app.TitlesCB.Value;tit=1;else;tit=0;end
@@ -571,7 +641,11 @@ switch upper(mode)
         end
     case 'MULTI'
         %PLOTS
-        C=app.PlotColors;
+        if numel(pD)<8
+            C = app.PlotColors;
+        else
+            C = graphClrCode(size(pD,2));%plot colorcode
+        end
         for i=1:size(pD,2)
             fi=pD(i).Results.Strain;
             if D==3
@@ -649,7 +723,7 @@ if isequal(upper(mode),'MULTI')
     saveas(f(end),fullfile(path,fnm+png));
 end
 
-%PLot inertal term evolution if possible
+%Plot inertial term evolution if possible
 if ~isempty(pD.Results.Inertia) && numel(pD)==1
     I=cat(2,pD.Results.Inertia{:});
     %calculate mean value
@@ -730,145 +804,169 @@ if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,...
     end
 end
 end
-function w2ClustPlotter(app,pD)
-%W2CLUSTPLOTTER Plots the distribution of clusters in negative W2 grains
+function aveClW2Plotter(app,pD)
+%STRAINCLUSTPLOTTER Plots the distribution of clusters cells and high dev
+%strain
+%Check title and legends option
 
-%create figures
-nb=9;
-f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
+if app.TitlesCB.Value;tit=1;else;tit=0;end
+
+%If any of the loaded files is a Qcst simultaion, the plot will be done
+%using pressure as x-axis
+
+%prepare paths
+path=MakePath(app,'STNW2AC');
+png=".png";
+
+%Plot histogram for last step, inflection points and a pt
+%betweem inflection and last step
+k=numel(pD.InfPts.q)+2;
+pts=[zeros(1,k-1) size(pD.Results.AveCluster,2)];
+for i=1:numel(pD.InfPts.q)
+    [~,pos]=min(abs(pD.Results.Strain-pD.InfPts.ez(i)));
+    pts(i)=pos;
+end
+pts(end-1)=ceil((pts(end)+pts(end-2))/2);
+fntSz=app.FontSizeEF.Value;
+
+
+%Prepare Figures
+nbPlt=4;
+nb=nbPlt*k+1;
+f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');ax(nb).FontSize = fntSz;
 for i=1:(nb-1)
     f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on'); %#ok<LAXES>
-end
-%Load variables
-cl=pD.Results.Cluster;
-str=pD.Results.Strain;
-rNb=pD.Results.Nb;
-%path
-path=MakePath(app,'LOOPW2');
-%Check title and legends option
-if app.TitlesCB.Value;tit=1;else;tit=0;end
-if app.LegendsCB.Value;leg=1;else;leg=0;end
-
-%Clusters 
-C=[0 0.4470 0.7410; %matlab default colors
-    0.8500 0.3250 0.0980;
-    0.9290 0.6940 0.1250;
-    0.4940 0.1840 0.5560];
-for i=1:2
-    for j=1:2
-        if j==1
-            plotMark(app,ax(4*(i-1)+j),str,cl(:,1,i),'Color',C(1,:))%Order 4=f(Ez)
-        end
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,2,i),'Color',C(2,:)) %Order 6=f(Ez)
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,3,i),'Color',C(3,:)) %Order 8-20=f(Ez)
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,4,i),'Color',C(4,:)) %Order 22=f(Ez)
-    end
-    totCl=sum(cl(:,:,i),2);
-    %graph ratio
-    for j=3:4
-        if j==3
-            plotMark(app,ax(4*(i-1)+j),str,cl(:,1,i)./totCl,'Color',C(1,:))%Order 4=f(Ez)
-        end
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,2,i)./totCl,'Color',C(2,:)) %Order 6=f(Ez)
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,3,i)./totCl,'Color',C(3,:)) %Order 8-20=f(Ez)
-        plotMark(app,ax(4*(i-1)+j),str,cl(:,4,i)./totCl,'Color',C(4,:)) %Order 22=f(Ez)
-    end
-    if leg
-        legend(ax(4*(i-1)+1),"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'location','best')
-        legend(ax(4*(i-1)+2),"Order 6","Order 8-20",...
-            "Order 22+",'location','best')
-        legend(ax(4*(i-1)+3),"Order 4","Order 6","Order 8-20",...
-            "Order 22+",'location','best')
-        legend(ax(4*(i-1)+4),"Order 6","Order 8-20",...
-            "Order 22+",'location','best')
-    end
-end
-%nb of W2grains
-plotMark(app,ax(end),str,rNb);
-
-infP=pD.InfPts;
-for k=1:numel(infP) %nb of pts
-    if infP(k)==0 || infP(k)>=str(end) || infP(k)<=str(1)
-        continue;
-    end
-    for j=1:nb %nb of plots
-        xl=xline(ax(j),infP(k),'--','Color','#C1C1C1');
-        set(get(get(xl,'Annotation'),'LegendInformation'),...
-            'IconDisplayStyle','off');
-        x2=xline(ax(j),infP(k),'--','Color','#C1C1C1');
-        set(get(get(x2,'Annotation'),'LegendInformation'),...
-            'IconDisplayStyle','off');
-    end
-end
-    
-%titles
-if tit
-    strg=["Cluster for negative W2 grains";
-        "Cluster for positive W2 grains";
-        "Ratio of negative W2 grains"];
-    for i=1:nb
-        title(ax(i),strg(ceil(i/4)))
-    end
-end
-%get correct yscales between fc and nfc grains
-for i=1:((nb-1)/2)
-    mx=max(cat(2,ax(i+[0,4]).YLim));
-    ax(i).YLim=[0 mx];
-    ax(i+4).YLim=[0 mx];
-end
-%Labels and save
-fnm=["W2Cl";"W2ClN4";"W2ClPct";"W2ClN4Pct";...
-    "NW2Cl";"NW2ClN4";"NW2ClPct";"NW2ClN4Pct"];
-for i=1:(nb-1)
-    if ismember(i,[1,2,5,6])
-        ylabel(ax(i),'Number of Cluster')
-    else
-        ylabel(ax(i),'Ratio of Cluster')
-    end
-    xlabel(ax(i),'Axial Strain')
-    f(i).Position(3:4)=app.Figsize;
-    saveas(f(i),fullfile(path,fnm(i)+".png"));
+    ax(i).FontSize = fntSz;
 end
 
-%last figure
-ylabel(ax(end),'Ratio of grains')
-xlabel(ax(end),'Axial Strain')
-f(end).Position(3:4)=app.Figsize;
-saveas(ax(end),fullfile(path,"NbW2Gr.png"));
+maxCl=30;
+%Plot histograms
+for i=1:k
+    aveCl=pD.Results.AveCluster(:,pts(i));  %pg ave cl value
+    w2=pD.Results.W2(:,pts(i));             %pg w2 value
+    %limit aveCl to 30 to reduce nb of bins
+    aveCl(aveCl>maxCl)=maxCl;
+    hstgEdges=(3.5:1:(ceil(max(aveCl))+0.5));
+    %plot histogram of all grains
+    histogram(ax((i-1)*nbPlt+1),aveCl,hstgEdges,'Normalization','probability') %'DisplayStyle','stairs'
+    %plot W2<0 histrograms
+    histogram(ax((i-1)*nbPlt+2),aveCl(w2<0),hstgEdges,'Normalization','probability')
+    %plot W2>=0 histograms
+    histogram(ax((i-1)*nbPlt+3),aveCl(w2>=0),hstgEdges,'Normalization','probability')
+    %Plot both w2 lines
+    h1=histcounts(aveCl(w2<0),'BinEdges',hstgEdges,'Normalization','probability');
+    h2=histcounts(aveCl(w2>=0),'BinEdges',hstgEdges,'Normalization','probability');
+    x=4:1:hstgEdges(end)-0.5;
+    plot(ax((i-1)*nbPlt+4),x,h1,x,h2,"LineWidth", app.PlotWidthEF.Value)
+
+    if tit; title(ax((i-1)*nbPlt+1),"Average cluster at strain " + pD.Results.Strain(pts(i)));end
+    xlabel(ax((i-1)*nbPlt+1),'Average Cluster Order')
+    ylabel(ax((i-1)*nbPlt+1),'Numeber of grains')
+    ax((i-1)*nbPlt+1).XTick=4:max(2,ceil((ax((i-1)*nbPlt+1).XLim(2)-4)/20)*2):2000;
+    fnm="St_"+pD.Results.Strain(pts(i))+"_Total_Histogram";
+    saveas(f((i-1)*nbPlt+1),fullfile(path,fnm+png));
+
+    if tit; title(ax((i-1)*nbPlt+2),"Average cluster at strain " + pD.Results.Strain(pts(i))+" (W2<0)");end
+    xlabel(ax((i-1)*nbPlt+2),'Average Cluster Order')
+    ylabel(ax((i-1)*nbPlt+2),'Numeber of grains')
+    ax((i-1)*nbPlt+2).XTick=4:max(2,ceil((ax((i-1)*nbPlt+2).XLim(2)-4)/20)*2):2000;
+    fnm="St_"+pD.Results.Strain(pts(i))+"_W2_Neg_Histogram";
+    saveas(f((i-1)*nbPlt+2),fullfile(path,fnm+png));
+
+    if tit; title(ax((i-1)*nbPlt+3),"Average cluster at strain " + pD.Results.Strain(pts(i))+" (W2>=0)");end
+    xlabel(ax((i-1)*nbPlt+3),'Average Cluster Order')
+    ylabel(ax((i-1)*nbPlt+3),'Numeber of grains')
+    ax((i-1)*nbPlt+3).XTick=4:max(2,ceil((ax((i-1)*nbPlt+3).XLim(2)-4)/20)*2):2000;
+    fnm="St_"+pD.Results.Strain(pts(i))+"_W2_Pos_Histogram";
+    saveas(f((i-1)*nbPlt+3),fullfile(path,fnm+png));
+
+    if tit; title(ax((i-1)*nbPlt+4),"Average cluster at strain " + pD.Results.Strain(pts(i))+" (W2>=0)");end
+    xlabel(ax((i-1)*nbPlt+4),'Average Cluster Order')
+    ylabel(ax((i-1)*nbPlt+4),'Numeber of grains')
+    legend(ax((i-1)*nbPlt+4),"W2<0","W2>=0")
+    ax((i-1)*nbPlt+4).XTick=4:max(2,ceil((ax((i-1)*nbPlt+4).XLim(2)-4)/20)*2):2000;
+    ax((i-1)*nbPlt+4).XLim(1)=4;
+    fnm="St_"+pD.Results.Strain(pts(i))+"_Curve";
+    saveas(f((i-1)*nbPlt+4),fullfile(path,fnm+png));
+
+end
+
+%plot evolution of nb of w2<0 grains
+if pD.SimType==3
+    xlab='Mean pressure (kPA)';
+    x=pD.Results.Stress;
+else
+    xlab='Axial strain';
+    x=pD.Results.Strain;
+end
+plot(ax(end),x,sum(pD.Results.W2<0,1)/size(pD.Results.W2,1),"LineWidth",app.PlotWidthEF.Value)
+if tit; title(ax(end),"Ratio of W2<0 grains");end
+ylabel(ax(end),'Ratio of Grains')
+xlabel(ax(end),xlab)
+fnm="Evol_W2_Nb";
+saveas(f(end),fullfile(path,fnm+png));
+
 %Delete figures in the case of exe all
 if isequal(app.LIGGGHTSAnalysisButtonGroup.SelectedObject,app.ExeAllButton)
     delete(f);
 end
 end
-%{
-function testplotshit(pD)
-file=pD.Results;
-%CHECK DIMENSION
-if pD.Bool3D;D=3;else; D=2;end
-nb=3;
+function strainClustPlotter(app,pD)
+%AVECLW2PLOTTER Function to plot aveCl and W2 data
+%Check title and legends option
 
-f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');
+if app.TitlesCB.Value;tit=1;else;tit=0;end
+
+%If any of the loaded files is a Qcst simultaion, the plot will be done
+%using pressure as x-axis
+
+%prepare paths
+path=MakePath(app,'STNCL');
+png=".png";
+
+%Plot histogram for last step, inflection points and a pt
+%betweem inflection and last step
+k=numel(pD.InfPts.q)+2;
+pts=[zeros(1,k-1) size(pD.Results.SC,2)];
+for i=1:numel(pD.InfPts.q)
+    [~,pos]=min(abs(pD.Results.Strain-pD.InfPts.ez(i)));
+    pts(i)=pos;
+end
+pts(end-1)=ceil((pts(end)+pts(end-2))/2);
+fntSz=app.FontSizeEF.Value;
+
+%Prepare Figures
+nbPlt=1;
+nb=nbPlt*k;
+f(nb)=figure;ax(nb)=axes(f(nb));hold(ax(nb),'on');ax(nb).FontSize = fntSz;
+
 for i=1:(nb-1)
     f(i)=figure;ax(i)=axes(f(i));hold(ax(i),'on'); %#ok<LAXES>
+    ax(i).FontSize = fntSz;
 end
-x1=file(2:end,2,1)-file(1:end-1,2,1);
-x2=file(2:end,2,end)-file(1:end-1,2,end);
-%plot(ax(1),file(1:end-1,1,1),x1,'-')
-plot(ax(1),file(1:end-1,1,2),x2./x1,'-x')
-title(ax(1),'ratio dEX Bagi/Ext')
-%Ey=f(t)
-y1=file(2:end,D,1)-file(1:end-1,D,1);
-y2=file(2:end,D,end)-file(1:end-1,D,end);
-%plot(ax(2),file(1:end-1,1,1),y1,'-')
-plot(ax(2),file(1:end-1,1,2),y2./y1,'-x')
-title(ax(2),'ratio dEY Bagi/Ext')
-%Ez=f(t)
-z1=file(2:end,D+1,1)-file(1:end-1,D+1,1);
-z2=file(2:end,D+1,end)-file(1:end-1,D+1,end);
-%plot(ax(3),file(1:end-1,1,1),z1,'-')
-plot(ax(3),file(1:end-1,1,2),z2./z1,'-x')
-title(ax(3),'ratio dEZ Bagi/Ext')
+
+%maxCl=30;
+%Plot histograms
+for i=1:k
+    clStn=pD.Results.SC(:,pts(i),:);  %pg ave cl value
+    % find last 0
+    clStn=clStn(1:find(clStn(:,:,1)~=0 | clStn(:,:,2)~=0,1,"last")+1,:,:);
+    %limit aveCl to 30 to reduce nb of bins
+    %clStn(clStn>maxCl)=maxCl;
+    O=(2:1:size(clStn,1))*2;
+    plot(ax((i-1)*nbPlt+1),O,clStn(2:end,:,1)/sum(clStn(2:end,:,1)),...
+        O,clStn(2:end,:,2)/sum(clStn(2:end,:,2)),...
+        "LineWidth", app.PlotWidthEF.Value)
+
+    if tit; title(ax((i-1)*nbPlt+1),"Cluster cell distribution at strain: " + pD.Results.Strain(pts(i)));end
+    xlabel(ax((i-1)*nbPlt+1),'Cluster Order')
+    ylabel(ax((i-1)*nbPlt+1),'Ratio of grains')
+    legend(ax((i-1)*nbPlt+1),"Above lim","Below lim")
+    ax((i-1)*nbPlt+1).XTick=4:max(2,ceil((ax((i-1)*nbPlt+1).XLim(2)-4)/20)*2):2000;
+    ax((i-1)*nbPlt+1).XLim(1)=4;
+    fnm="St_"+pD.Results.Strain(pts(i))+"_Cell_Cluster";
+    saveas(f((i-1)*nbPlt+1),fullfile(path,fnm+png));
 
 end
-%}
+
+end

@@ -3,12 +3,12 @@ classdef trialData
     %   The object created through this class will contain all the
     %   information needed about the test : the geometry and the pistons
     %   forces and displacements.
-    
+
     properties
-        %vectorial values
+        %vectorial load values
         Step
         Dz      %vertical displacement Z, sense -z
-        Fz      %vertical force Z, sense -z
+        Fz      %vertical force Z
         Dy1     %horizontal displacement Y, sense +y
         Fy1     %horizontal force Y1, sense +
         Dy2     %horizontal displacement Y, sense -y
@@ -17,94 +17,131 @@ classdef trialData
         Fx1     %horizontal force X1, sense +x
         Dx2     %horizontal displacement X, sense -x
         Fx2     %horizontal force X2, sense -x
-        dE      %incremental strain in lagrangian framework
         InfPts  %Inflection points of Ev and q
-        
+
+        %Vectorial calculated values
+        SigZ    %verical stress, sense -z
+        SigY1   %horizontal stress Y1
+        SigY2   %horizontal stress Y2
+        SigY    %horizontal stress Y
+        SigX1   %horizontal stress X1
+        SigX2   %horizontal stress X2
+        SigX    %horizontal stress X
+        DevS    %Deviatoric stress
+        MeanS   %Mean stress
+        dE      %incremental strain in lagrangian framework
+
         %scalar valors
         boxX    %box width  - x
         boxY 	%box length - y
         boxZ 	%box height - z - also pistonY height
-        
+
         %boolean
         checkPiston
     end
-    
+
     methods
         %Calling Functions
         function TD = trialData(app,trialData)
             %check witch folder to load and filename
-            if numel(app.DataFolder)==1
-                rData = readData('PISTONS',app,app.ConsoStep);
-            else
-                rData = readData('PISTONS',app,app.ConsoStep);
-                rData2 = readData('PISTONS',app,app.ConsoStep+1);
-                rData2(:,1)=rData2(:,1)+rData(end,1); %correct comp steps
-                rData=[rData;rData2(2:end,:)];
-            end
-            if size(rData,2)>7;TD.checkPiston=1;else;TD.checkPiston=0;end
-            
-            %store data into properties
-            if exist('trialData','var')
-                TD=trialData;
-                %Check if last TD element is the same of the new one that
-                %will be added. If yes remove copy from the selection
-                if TD.Step(end) == rData(1,1);k=2;
-                else;k=1;
-                end
-                TD.Step=[TD.Step;rData(k:end,1)];
-                TD.Fz=[TD.Fz;rData(k:end,2)];
-                TD.Dz=[TD.Dz;rData(k:end,3)];
-                TD.Fy1=[TD.Fy1;rData(k:end,4)];
-                TD.Dy1=[TD.Dy1;rData(k:end,5)];
-                TD.Fy2=[TD.Fy2;rData(k:end,6)];
-                TD.Dy2=[TD.Dy2;rData(k:end,7)];
-                if TD.checkPiston
-                    TD.Fx1=[TD.Fx1;rData(k:end,8)];
-                    TD.Dx1=[TD.Dx1;rData(k:end,9)];
-                    TD.Fx2=[TD.Fx2;rData(k:end,10)];
-                    TD.Dx2=[TD.Dx2;rData(k:end,11)];
-                end
-            else
-                TD.Step=rData(:,1);
-                TD.Fz=rData(:,2);
-                TD.Dz=rData(:,3);
-                TD.Fy1=rData(:,4);
-                TD.Dy1=rData(:,5);
-                TD.Fy2=rData(:,6);
-                TD.Dy2=rData(:,7);
-                if TD.checkPiston
-                    TD.Fx1=rData(:,8);
-                    TD.Dx1=rData(:,9);
-                    TD.Fx2=rData(:,10);
-                    TD.Dx2=rData(:,11);
-                end
-                %save geometric data
-                TD.boxX = app.boxXEF.Value;     %box width - x
-                TD.boxY = app.boxYEF.Value;     %box length - y
-                TD.boxZ = app.boxZEF.Value;     %box height - z - also pistonY height
-            end
-            if ~isempty(app.SimType)
-                %On LIGGGHTS, after consolidation, some pistons change
-                %control from stress to displacement. On this process the
-                %position is reset. This part recalculates the position
-                %correctly.
-                
-                %correct pos before consolidation
-                TD.Dz=TD.Dz+app.ConsoDpl(1,5);
-                TD.Dx1=TD.Dx1+app.ConsoDpl(1,1);
-                TD.Dx2=TD.Dx2+app.ConsoDpl(1,2);
-                TD.Dy1=TD.Dy1+app.ConsoDpl(1,3);
-                TD.Dy2=TD.Dy2+app.ConsoDpl(1,4);
-                
-                %correct pos after consolidation. First find the postion of
-                %the step transition
-                pos=find((TD.Step)>app.ConsoStep,1);
-                if app.ExeType==2;pos=pos-1;end
-                TD.Dz(pos:end)=TD.Dz(pos:end)+app.ConsoDpl(2,5);
-                TD.Dx1(pos:end)=TD.Dx1(pos:end)+app.ConsoDpl(2,1);
-                TD.Dx2(pos:end)=TD.Dx2(pos:end)+app.ConsoDpl(2,2);
-                TD.Dy1(pos:end)=TD.Dy1(pos:end)+app.ConsoDpl(2,3);
-                TD.Dy2(pos:end)=TD.Dy2(pos:end)+app.ConsoDpl(2,4);
+            switch app.DEMSoftware
+                case 1
+                    %%% LIGGGHTS LOAD %%%
+                    if numel(app.DataFolder)==1
+                        rData = readData('PISTONS',app,app.ConsoStep);
+                    else
+                        rData = readData('PISTONS',app,app.ConsoStep);
+                        rData2 = readData('PISTONS',app,app.ConsoStep+1);
+                        rData2(:,1)=rData2(:,1)+rData(end,1); %correct comp steps
+                        rData=[rData;rData2(2:end,:)];
+                    end
+                    if size(rData,2)>7;TD.checkPiston=1;else;TD.checkPiston=0;end
+
+                    %store data into properties
+                    if exist('trialData','var')
+                        TD=trialData;
+                        %Check if last TD element is the same of the new one that
+                        %will be added. If yes remove copy from the selection
+                        if TD.Step(end) == rData(1,1);k=2;
+                        else;k=1;
+                        end
+                        TD.Step=[TD.Step;rData(k:end,1)];
+                        TD.Fz=[TD.Fz;rData(k:end,2)];
+                        TD.Dz=[TD.Dz;rData(k:end,3)];
+                        TD.Fy1=[TD.Fy1;rData(k:end,4)];
+                        TD.Dy1=[TD.Dy1;rData(k:end,5)];
+                        TD.Fy2=[TD.Fy2;rData(k:end,6)];
+                        TD.Dy2=[TD.Dy2;rData(k:end,7)];
+                        if TD.checkPiston
+                            TD.Fx1=[TD.Fx1;rData(k:end,8)];
+                            TD.Dx1=[TD.Dx1;rData(k:end,9)];
+                            TD.Fx2=[TD.Fx2;rData(k:end,10)];
+                            TD.Dx2=[TD.Dx2;rData(k:end,11)];
+                        end
+                    else
+                        TD.Step=rData(:,1);
+                        TD.Fz=rData(:,2);
+                        TD.Dz=rData(:,3);
+                        TD.Fy1=rData(:,4);
+                        TD.Dy1=rData(:,5);
+                        TD.Fy2=rData(:,6);
+                        TD.Dy2=rData(:,7);
+                        if TD.checkPiston
+                            TD.Fx1=rData(:,8);
+                            TD.Dx1=rData(:,9);
+                            TD.Fx2=rData(:,10);
+                            TD.Dx2=rData(:,11);
+                        end
+                        %save geometric data
+                        TD.boxX = app.boxXEF.Value;     %box width - x
+                        TD.boxY = app.boxYEF.Value;     %box length - y
+                        TD.boxZ = app.boxZEF.Value;     %box height - z - also pistonY height
+                    end
+                    if ~isempty(app.SimType)
+                        %On LIGGGHTS, after consolidation, some pistons change
+                        %control from stress to displacement. On this process the
+                        %position is reset. This part recalculates the position
+                        %correctly.
+
+                        %correct pos before consolidation
+                        TD.Dz=TD.Dz+app.ConsoDpl(1,5);
+                        TD.Dx1=TD.Dx1+app.ConsoDpl(1,1);
+                        TD.Dx2=TD.Dx2+app.ConsoDpl(1,2);
+                        TD.Dy1=TD.Dy1+app.ConsoDpl(1,3);
+                        TD.Dy2=TD.Dy2+app.ConsoDpl(1,4);
+
+                        %correct pos after consolidation. First find the postion of
+                        %the step transition
+                        pos=find((TD.Step)>app.ConsoStep,1);
+                        if app.ExeType==2;pos=pos-1;end
+                        TD.Dz(pos:end)=TD.Dz(pos:end)+app.ConsoDpl(2,5);
+                        TD.Dx1(pos:end)=TD.Dx1(pos:end)+app.ConsoDpl(2,1);
+                        TD.Dx2(pos:end)=TD.Dx2(pos:end)+app.ConsoDpl(2,2);
+                        TD.Dy1(pos:end)=TD.Dy1(pos:end)+app.ConsoDpl(2,3);
+                        TD.Dy2(pos:end)=TD.Dy2(pos:end)+app.ConsoDpl(2,4);
+                    end
+                    %CALCULATE STRESSES
+                    TD = stressCalculation(TD,app);
+                case 2
+                    %%% YADE LOAD %%%
+                    rData = readData('PISTONSYADE',app,app.ConsoStep);
+                    TD.Step=rData(:,1);
+                    TD.SigX1=rData(:,2)*10^-3; %kPa
+                    TD.SigX2=rData(:,2)*10^-3; %kPa
+                    TD.SigX=rData(:,2)*10^-3;  %kPa
+                    TD.SigY1=rData(:,3)*10^-3; %kPa
+                    TD.SigY2=rData(:,3)*10^-3; %kPa
+                    TD.SigY=rData(:,3)*10^-3;  %kPa
+                    TD.SigZ=rData(:,4)*10^-3;  %kPa
+                    TD.Dz=rData(:,5);
+                    TD.Dy1=rData(:,6);
+                    TD.Dy2=rData(:,7);
+                    TD.Dx1=rData(:,8);
+                    TD.Dx2=rData(:,9);
+                    %save geometric data
+                    TD.boxX = app.boxXEF.Value;     %box width - x
+                    TD.boxY = app.boxYEF.Value;     %box length - y
+                    TD.boxZ = app.boxZEF.Value;     %box height - z - also pistonY height
             end
         end
         %Calculation Functions
@@ -158,23 +195,20 @@ classdef trialData
             snExt=snExt((ismember(TD.Step,steps)),:)...
                 -snExt((TD.Step==step0),:);
         end
-        function ssExt = extStress(TD,steps,app)
-            %EXTSTRESS calculates external stress
-            %   This function use the data contained in the 'trialData'
-            %   object to calculate the stress for all the calling 'steps'.
-            %   It will also calculate the principal and deviatoric stress.
-            %   This function returns a Nx(D+2) matrix, where N is the
-            %   number of steps and D the dimension of calculation.
-            
-            %logical vector containing the position of the steps we want to use
-            stId=ismember(TD.Step,steps);
+        function TD = stressCalculation(TD,app)
+            %STRESSCALCULATION return external stress data
+            %   LIGGGTHS execution retuns the force of pistons and not
+            %   stress. This function will transform these values in stress
+            %   and save it in TD's stress properties.
+            %   This function is automatically called when loading a
+            %   LIGGGHTS script
             
             %%%%Calculate the surface of the pistons
             boxZarray=TD.boxZ+TD.Dz;
             boxYarray=TD.boxY-TD.Dy1+TD.Dy2;
             
             %Calculate the surface of pistons, *1000 to work on kPa
-            if app.checkPiston %take pistonX area into account
+            if TD.checkPiston %take pistonX area into account
                 boxXarray=TD.boxX-TD.Dx1+TD.Dx2;
                 SurfPX=boxZarray.*boxYarray*1000;
                 SurfPY=boxXarray.*boxZarray*1000;
@@ -190,32 +224,59 @@ classdef trialData
             end
             
             %Calculate the stress, Forces/Surfaces
-            sigZ=TD.Fz(stId)./SurfPZ(stId);
-            sigY1=-TD.Fy1(stId)./SurfPY(stId);
-            sigY2=TD.Fy2(stId)./SurfPY(stId);
+            %Z direction
+            sigZ=TD.Fz./SurfPZ;
+            TD.SigZ=sigZ;
+            %Y direction
+            sigY1=-TD.Fy1./SurfPY;
+            sigY2=TD.Fy2./SurfPY;
             sigY=(sigY1+sigY2)/2;
-            if app.checkPiston %check existence of x direction pistons
-                sigX1=-TD.Fx1(stId)./SurfPX(stId);    %per element division
-                sigX2=TD.Fx2(stId)./SurfPX(stId);     %per element division
-                sigX=(sigX1+sigX2)/2;                       %mean value
+            TD.SigY1=sigY1;
+            TD.SigY2=sigY2;
+            TD.SigY=sigY;
+            %check existence of X direction pistons
+            if TD.checkPiston
+                sigX1=-TD.Fx1./SurfPX;    %per element division
+                sigX2=TD.Fx2./SurfPX;     %per element division
+                sigX=(sigX1+sigX2)/2;     %mean value
+                TD.SigX1=sigX1;
+                TD.SigX2=sigX1;
+                TD.SigX=sigX;
             end
             
             %Calculate the stress principal and deviatoric stresses
-            if app.checkPiston
-                q=sqrt(1/2*((sigX-sigY).^2+(sigY-sigZ).^2+...
+            if TD.checkPiston
+                TD.DevS=sqrt(1/2*((sigX-sigY).^2+(sigY-sigZ).^2+...
                     (sigZ-sigX).^2 ));
-                p=(sigX+sigY+sigZ)/3;
+                TD.MeanS=(sigX+sigY+sigZ)/3;
             else
-                q=(sigZ-sigY)/2;
-                p=(sigY+sigZ)/2;
+                TD.DevS=(sigZ-sigY)/2;
+                TD.MeanS=(sigY+sigZ)/2;
             end
+
+        end
+        function ssExt = extStress(TD,steps,app,varargin)
+            %EXTSTRESS return external stress data
+            %   Use the properties of TD to return the data related of the
+            %   demanded steps
             
-            %Returning Value
+            %Prepare correct data
             if app.checkPiston
-                ssExt=[sigX,sigY,sigZ,q,p];
+                ssExt=[TD.SigX,TD.SigY,TD.SigZ,TD.DevS,TD.MeanS];
+                if nargin>3
+                    ssExt=[ssExt,TD.SigX1,TD.SigX2,TD.SigY1,TD.SigY2];
+                end
             else
-                ssExt=[sigY,sigZ,q,p];
+                ssExt=[TD.SigY,TD.SigZ,TD.DevS,TD.MeanS];
+                if nargin>3
+                    ssExt=[ssExt,TD.SigY1,TD.SigY2];
+                end
             end
+            %logical vector containing the position of the steps we want to use
+            stId=ismember(TD.Step,steps);
+            %Get only the corrected lines
+            ssExt=ssExt(stId,:);
+            
         end
         function TD  = inflectionPoints(TD,app)
             %VALUABLEPOINTS Calculates Ez of important points
@@ -235,49 +296,6 @@ classdef trialData
             TD.InfPts.ev='';
             switch app.SimType
                 case 1
-                    %{
-                    %OLD EXECUTION THROUGH MEAN VALUES. NOW I WILL JUST GET
-                    MIN AND MAX EV AND Q
-                    %get Ez, Ev and q
-                    ez=snExt(:,app.Bool3D+2);
-                    ev=snExt(:,end-1);
-                    q=ssExt(:,end-1);
-                    p=ssExt(:,end-1);
-                    
-                    %smooth the courbs with the values around them
-                    ev=smoothdata(ev,'movmean',[15,15]);
-                    q=smoothdata(q,'movmean',[15,15]);
-                    
-                    %Calculate the diference of values (q(t+1)-q(t)) and smooth the
-                    %data with a gaussian courb
-                    dEz=diff(ez);
-                    ez=(ez(1:end-1)+ez(2:end))/2;
-                    p=(p(1:end-1)+p(2:end))/2;
-                    qbs=(q(1:end-1)+q(2:end))/2;
-                    dEv = smoothdata(diff(ev)./dEz,'gaussian');
-                    dQ = smoothdata(diff(q)./dEz,'gaussian');
-                    
-                    %get the first two minimal values of dEv. Find first negative
-                    %value, then find first positive value after it.
-                    v1=find(dEv<0,1);
-                    v2=find(dEv(v1:end)>0,1)+v1-1;
-                    if isempty(v2)
-                        InfE=v1;
-                    else
-                        InfE=[v1;v2];
-                    end
-                    
-                    v3=find(dQ<0,1);
-                    v4=find(dQ(v3:end)>0,1)+v3-1;
-                    if isempty(v4)
-                        InfQ=v3;
-                    else
-                        InfQ=[v3;v4];
-                    end
-                    TD.InfPts.e=ez([InfE;InfQ]);
-                    TD.InfPts.p=p([InfE;InfQ]);
-                    TD.InfPts.q=qbs([InfE;InfQ]);
-                    %}
                     [~,pmq]=max(ssExt(:,end-1));    %max q location
                     [~,pmev]=max(snExt(:,end-1));   %max ev location
                     
@@ -291,9 +309,6 @@ classdef trialData
                     %be considered as the point where qp is at its max
                     qp=ssExt(:,end-1)./ssExt(:,end);
                     [~,f]=max(qp);
-                    %cmp=(abs(mx-qp)/mx)<0.005;
-                    %f(1)=find(cmp,1,'last');
-                    %f(2)=find(cmp,1,'first');
                     
                     TD.InfPts.ez=snExt(f,end-2);
                     TD.InfPts.ev=snExt(f,end-1);
@@ -301,16 +316,12 @@ classdef trialData
                     TD.InfPts.q=ssExt(f,end-1);
                 case 3
                     %on Qcst simulations : step where drained triaxial
-                    %phase ends AND point where q values drops of 1%
+                    %phase ends AND peak q/p
                     
-                    fA=find(stp==app.QcstStep(1));
+                    fA=find(stp==app.QcstStep(1));   % end drained
+                    qp=ssExt(:,end-1)./ssExt(:,end); % q/p max too
+                    [~,fB]=max(qp);
                     
-                    [mxQ,mxPos]=max(ssExt(: ,end-1));
-                    fB=find((ssExt(mxPos:end,end-1)/mxQ)>0.99,1,'last')+mxPos;
-                    
-%                     % changed to q/p max too
-%                     qp=ssExt(:,end-1)./ssExt(:,end);
-%                     [~,f]=max(qp);
                     TD.InfPts.ez=snExt([fA,fB],end-2);
                     TD.InfPts.ev=snExt([fA,fB],end-1);
                     TD.InfPts.p=ssExt([fA,fB],end);
@@ -528,12 +539,11 @@ classdef trialData
         %Getters Functions
         function w = getWidth(TD,steps) %x
             %GETWIDTH return the width of the box at the specified steps
-            if isempty(TD.boxPX)
+            if isempty(TD.Dx1)
                 w=TD.boxX;
             else
                 w=TD.boxX+TD.Dx1-TD.Dx2;
                 w=w(ismember(TD.Step,steps));
-                
             end
         end
         function l = getLength(TD,steps) %y

@@ -6,10 +6,7 @@ function exe_Displacement(app)
 %   visualization.
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-nbFiles=ceil((N2-N1)/interval+1);
+[N1,N2,interval,~,nbFiles] = createStepArray(app);
 path=MakePath(app,'DPL');
 
 if isequal(app.DplStep0Switch.Value,'On')

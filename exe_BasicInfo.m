@@ -16,7 +16,7 @@ try lw=app.PlotWidthEF.Value;
 catch
     lw=1.5;
 end
-
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 path=MakePath(app,'BSCINF');
 png=".png";
 

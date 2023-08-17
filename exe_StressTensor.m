@@ -12,26 +12,7 @@ function exe_StressTensor(PD,app)
 if isequal(PD,'LOAD');STlLoad(app);return;end
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray);
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
 
 
 %Check subdivision and do necessary calculations
@@ -238,6 +219,8 @@ else
 end
 path=MakePath(app,'FORCE');
 png=".png";
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
+
 %char Grec
 sigma=convertCharsToStrings(char(963));
 %Check title and legends option
@@ -348,7 +331,11 @@ switch upper(mode)
         pD(1).Prefix='multi';
         evVals=[0,0];
         qVals=[0,0];
-        C=app.PlotColors;
+        if numel(pD)<8
+            C = app.PlotColors;
+        else
+            C = graphClrCode(size(pD,2));%plot colorcode
+        end
         for i=1:size(pD,2)
             file=pD(i).Results;j=1;
             %plot1 q=f(p)

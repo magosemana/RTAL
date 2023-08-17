@@ -7,29 +7,10 @@ if nargin>1
     if isequal(upper(mode),'LOAD');loadEdges(app);return;end %check Load
 end
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-if interval==app.IntervalEF.Value && app.SimType==3
-    qst=app.QcstStep(2);
-    if qst>N2
-        stepArray=(N1:interval:N2)';
-    elseif qst<=N1
-        f=find(app.TrialData.Step==N1 | app.TrialData.Step==N2);
-        stepArray=app.TrialData.Step(f(1):f(2));
-    else
-        stepArray=(N1:interval:qst)';
-        f=find(app.TrialData.Step==qst | app.TrialData.Step==N2);
-        stepArray=[stepArray(1:end-1);app.TrialData.Step(f(1):f(2))];
-    end
-else
-    stepArray=(N1:interval:N2)';
-    if stepArray(end)~=N2; stepArray=[stepArray;N2];end
-end
-nbFiles=numel(stepArray);
+
 %check dimesion
 if app.Bool3D; D=3;else; D=2;end
-
+[N1,N2,interval,stepArray,nbFiles] = createStepArray(app);
 res=zeros(nbFiles,3);
 app=CalcPanel(app,'',nbFiles,'Starting calculation','on');
 for i=1:nbFiles
@@ -68,7 +49,7 @@ res=[xAxis res(:,2:3)];
 %Inflection Points
 infP=[0,0,0,0];
 %Start file to store values
-fnm=MakePath(app,'EDG')+"Edges"+N1+"to"+N2+"int"+interval+".txt";
+fnm=fullfile(MakePath(app,'EDG'),"Edges"+N1+"to"+N2+"int"+interval+".txt");
 fid = fopen(fnm, 'w');
 fprintf(fid, '## Evolution of nb of Edges ##\n');
 fprintf(fid, 'Simulation|Important|Values\n');
@@ -98,11 +79,15 @@ if app.LegendsCB.Value;leg=1;else;leg=0;end
 
 path=MakePath(app,'EDG');
 png=".png";
-C=app.PlotColors;
-
+if numel(pD)<8
+    C = app.PlotColors;
+else
+    C = graphClrCode(size(pD,2));%plot colorcode
+end
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 if numel(pD)==1
     nb=3;
-    l=["Closed Edes","Open Edges"];
+    l=["Closed Edges","Open Edges"];
     mp=0;
 else
     nb=5;

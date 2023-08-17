@@ -1,43 +1,40 @@
-%clc
-%{
-pth=["~/Documents/Joao/3D/3P2022-03-09/D28";    %1
-    "~/Documents/Joao/3D/3P2022-03-09/D50";     %2
-    "~/Documents/Joao/3D/3P2022-03-09/D100";    %3
-    "~/Documents/Joao/3D/3P2022-03-09/D200";    %4
-    "~/Documents/Joao/3D/3P2022-03-09/U50";     %5
-    "~/Documents/Joao/3D/3P2022-03-09/U100";    %6
-    "~/Documents/Joao/3D/3P2022-03-09/U200";    %7
-    "~/Documents/Joao/3D/3P2022-08-10/Q50";     %8
-    "~/Documents/Joao/3D/3P2022-08-10/Q100";    %9
-    "~/Documents/Joao/3D/3P2022-08-10/Q200";    %10
-    "~/Documents/Joao/3D/3P2022-08-10/Q100-200";%11
-    "~/Documents/Joao/3D/3P2022-08-10/Q100-150";%12
-    "~/Documents/Joao/3D/3P2022-12-22/D100";    %13
-    "~/Documents/Joao/3D/3P2023-02-14/Q50-100"; %14
-    "~/Documents/Joao/3D/3P2023-02-14/Q100-100"; %15
-    "~/Documents/Joao/3D/3P2023-02-14/Q100-150"; %16
-    "~/Documents/Joao/3D/3P2023-02-14/Q100-200"; %17
-    "~/Documents/Joao/3D/3P2023-02-14/Q200-100"];%18
-%}
+clc;
 
-pth=["/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/D28";      %1
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/D50";       %2
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/D100";      %3
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/D200";      %4
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/U50";       %5
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/U100";      %6
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/U200";      %7
-    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Q100-100"]; %8 
 
-tgPath="~/Documents/Joao/3D/Res";
-mode=["STRAIN","FC","FCCL","LOOPS","LOOPA","LOOPD","LOOPVR","VOID"];
+pth=["/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/D28";           %1
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/D50";            %2
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/D200";           %3
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/D100";           %4
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/U50";            %5
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/U100";           %6
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/U200";           %7
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/Q50-100";        %8
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/Q100-100";       %9
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/Q100-150";       %10
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/Q100-200";       %11
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Thesis/Q200-100";       %12
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-D40.8";    %13
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-D46"       %14
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-D54";      %15
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-Q100-150"; %16
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-Q100-200"; %17
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/B-D52.2";    %18
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/B-Q100-150"; %19
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/C-D47";      %20
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/C-Q100-150"; %21    
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-D28";      %22
+    "/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Simulations_Article_2/A-Q100-100"];%23    
+
+
+tgPath="/media/geomas/86e0a188-ce71-4076-82d4-812cf66dd378/Simulations/Res";
+mode=[ "LOOPVR","LOOPS","FORCEXT","VOID"];
 %"ANI","EDG","FC","FCCL","FCCLTF","FORCE","FORCEXT","LOOPS","LOOPA",
-%    "LOOPCT","LOOPD","LOOPVR","VOID","STRAIN"
+%    "LOOPCT","LOOPD","LOOPVR","VOID","STRAIN","STNW2AC"
 
 
-for i=1:3%numel(pth)
+for i=23:23
     exe_NoApp(pth(i))
-    %resGrouper(tgPath,pth(i),mode)
+    resGrouper(tgPath,pth(i),mode)
 end
 
 %quit

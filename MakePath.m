@@ -23,7 +23,9 @@ switch upper(mode)
     case 'FORCE';   str = 'Forces';
     case 'FORCEXT'; str = 'ForcesExt';
     case 'FORCEXTL';str = 'ForcesExt/Load';
-    case 'LOOPS';   str = 'Loops';
+    case 'LOOPS';   str = 'Loops/General';
+    case 'LOOPL';   str = 'Loops/General/Load';
+    case 'LOOPAC';  str = 'Loops/AveCluster';
     case 'LOOPA';   str = 'Loops/Anisotropy';
     case 'LOOPAL';  str = 'Loops/Anisotropy/Load';
     case 'LOOPCT';  str = 'Loops/ClusterTransformation';
@@ -31,15 +33,15 @@ switch upper(mode)
     case 'LOOPD';   str = 'Loops/Deformability';
     case 'LOOPDL';	str = 'Loops/Deformability/Load';
     case 'LOOPDCL'; str = 'Loops/Deformability/Cluster';
-    case 'LOOPL';   str = 'Loops/Load';
     case 'LOOPST';  str = 'Loops/Stress';
     case 'LOOPVR';  str = 'Loops/VoidRatio';
     case 'LOOPVRL'; str = 'Loops/VoidRatio/Load';
     case 'LOOPVRCL';str = 'Loops/VoidRatio/Cluster';
-    case 'LOOPW2';  str = 'Strain/ClusterW2';
     case 'VOID';	str = 'Voidratio-Porosity';
     case 'VOIDL';	str = 'Voidratio-Porosity/Load';
     case 'STRAIN';  str = 'Strain';
+    case 'STNCL';   str = 'Strain/StrainCluster';
+    case 'STNW2AC'; str = 'Strain/W2AveCl';
     case 'SCF';     str = 'SpaceCellFiles';
     otherwise;      str='';
 end

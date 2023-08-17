@@ -15,7 +15,6 @@ classdef singleLoop
         Order           %Number of exterior surfaces/edges - double
         Deformability   %Nb O edges / N tot edges
         
-        
         %3D only properties
         Grains          %Ids of grains forming the loops (only 3D) - Nx1 vector
         NbGrains        %Number of grains forming the loop - double

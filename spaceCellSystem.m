@@ -73,7 +73,7 @@ classdef spaceCellSystem
         Radius              %Grains radius                  - NbGx1 array
         sCells              %'spaceCells' objects           - NbCx1
         Step                %Calculation Step               - integer
-        TotalVolume         %Total DT volume/area           - integer
+        TotalVolume         %Total DT volume/area           - double
         Interval            %Interval between relative calc - integer
         
         %STRAIN TENSOR PROPERTIES
@@ -81,26 +81,27 @@ classdef spaceCellSystem
         EdgeID              %grain Ids forming edges        - NbEx2 matix
         NbE                 %TotalNb of edges between grains- integer
         GrainVolume         %Voronoi volume of each grain   - NbGx1 Vector
-        %BAGI96
+            %BAGI96
         CompAVector         %Complementary area vector      - NxD matrix
         GStTensor           %Global Strain tensor           - DxD matrix
         PStTensor           %Per Grain Strain tensor        - NbGxD matrix
-        %Linear Interpolation
+            %Linear Interpolation
         CellStn             %Per Cell Strain value          - 3x3xNbGc matrix
-        CellVol             %Per Cell Volume - NbGcx1
+        CellVol             %Per Cell Volume                - NbGcx1
         CellGrn             %Grains Forming each cell       - NbGcx4 matrix
         
         %LOOPS PROPERTIES
-        Loops               %SingleLoops objects            - Nx1
-        Clt4                %SingleLoops obj - 1 obj for all Clts4
+        Loops               %SingleLoops objects            - object vector
+        Clt4                %SingleLoops obj                - object
         BadIds              %Ids of "fakepoints"            - Nx1 vector
         ClosedEdges         %Closed Edges                   - Nx2 matrix
         OpenEdges           %Open Edges                     - Nx2 matrix
+        TotalVR             %Void ratio of the specime      - double
     end
     
     methods
         %Calling function
-        function sc = spaceCellSystem(mode,step,grNew,varargin)
+        function sc = spaceCellSystem(mode,step,gr,varargin)
             %SPACELL Construct an instance of this class
             %   Construct the fist part of the space cell by creating the
             %   delaunay tesselation. Also it atributes properties that
@@ -131,17 +132,18 @@ classdef spaceCellSystem
             %check app
             app=varargin{n};
             if app.Bool3D;D=3;else; D=2;end %Check if 3d or 2D
-            vert=grNew.Coord(:,(4-D):3);
+            vert=gr.Coord(:,(4-D):3);
             PD=varargin{n+1};
             if n==2
-                grOld=varargin{1};
-                vert0=grOld.Coord(:,(4-D):3);
+                %grain object at next interval used to calculate the
+                %displacement of each particle.
+                grTdT=varargin{1};
             end
             %To better identify and make the connection with actual grains
             %better, 'fakepoints' that follow the geometry of the walls
             %will be added to the delaunay triangulation. These points will
             %later have to be removed from all calculations.
-            pts=wallFakepoints(app.TrialData,app,step,max(grNew.Radius),PD);
+            pts=wallFakepoints(app.TrialData,app,step,max(gr.Radius),PD);
             
             %Delaunay tesselation
             DT=delaunayTriangulation([vert;pts]);
@@ -159,9 +161,9 @@ classdef spaceCellSystem
             switch upper(mode)
                 case {"GLOBAL","PERCELL","BOTH"}
                     fprintf('Strain calculation at step %d\n',sc.Step)
-                    sc.Radius=[grNew.Radius;zeros(size(pts,1),1)];
-                    sc.Displacements = [vert-vert0;zeros(size(pts))];
-                    sc = pcStrain(sc,grNew);
+                    sc.Radius=[gr.Radius;zeros(size(pts,1),1)];
+                    sc.Displacements = [grTdT.Coord(:,(4-D):3)-vert;zeros(size(pts))];
+                    sc = pcStrain(sc,gr);
                     sc=strainCells(sc);                 %create spaceCells objects
                     sc=compAreaVector(sc);              %calculate complementary area vectors
                 case {"LOOPS"}
@@ -173,8 +175,8 @@ classdef spaceCellSystem
                     sc=findOpenEdges(sc,step,app,PD);
                 case "TEST"
                     fprintf('Test calculation at step %d\n',sc.Step)
-                    sc.Radius=[grNew.Radius;zeros(size(pts,1),1)];
-                    sc.Displacements = [vert-vert0;zeros(size(pts))];
+                    sc.Radius=[gr.Radius;zeros(size(pts,1),1)];
+                    sc.Displacements = [grTdT.Coord(:,(4-D):3)-vert;zeros(size(pts))];
                     %sc=grainVolume(sc);
             end
         end
@@ -1165,7 +1167,7 @@ classdef spaceCellSystem
             cT.NbC=nbC;
             fprintf('Cluster Transf finished \n')
         end
-        function sc = clusterVRangle(sc,gr)
+        function sc = clusterVR(sc,gr)
             %CLUSTERVOIDRATIO calculate each cluster Void Ratio
             % This function go through all clusters inside the simulation
             % and determinate the volume of the grains inside each cell.
@@ -1182,9 +1184,9 @@ classdef spaceCellSystem
             fprintf('Begin Cluster VR \n')
             %check total volume calculation
             gC = goodCell(sc);
-            vl = perCellVolume(sc,gr,gC);
+            vt = perCellVolume(sc,gr,gC);
             %For each good cell, calculate the solid volume inside of it
-            [~,vs,~]=perCellVoidRatio(sc,gr,gC,vl);
+            [~,vs,~]=perCellVoidRatio(sc,gr,gC,vt);
             
             %Calculate the void ratio of each cluster
             for cl=1:numel(sc.Loops)
@@ -1192,14 +1194,16 @@ classdef spaceCellSystem
                 lvs=sum(vs(lgC));
                 %if total volume is empty calculate it
                 if isempty(sc.Loops(cl).Volume)
-                    sc.Loops(cl).Volume=sum(vl(lgC));
+                    sc.Loops(cl).Volume=sum(vt(lgC));
                 end
                 %calculate VR and save it
                 sc.Loops(cl).VoidRatio=(sc.Loops(cl).Volume-lvs)/lvs;
             end
             %Identify cluster4 cells
             lgC=~ismember(gC,cat(2,sc.Loops.sCells));
-            sc.Clt4.VoidRatio=(vl(lgC)-vs(lgC))./vs(lgC);
+            sc.Clt4.VoidRatio=(vt(lgC)-vs(lgC))./vs(lgC);
+            %calculate total vr
+            sc.TotalVR=(sum(vt)-sum(vs))/sum(vs);
             fprintf('Cluster VR finished\n')
         end
         %Support functions
@@ -1355,285 +1359,3 @@ classdef spaceCellSystem
         end
     end%meth end
 end%class end
-
-% Support Functions
-
-
-%{
-OLD VR CALCULATIONS
-        function sc = clusterVRboundary(sc,gr)
-            %CLUSTERVOIDRATIO calculate each cluster Void Ratio
-            % This function go through all cells belonging to clusters
-            % inside of the simulation, and calculating their void volume.
-            % Then for each loop the Void Ratio will be calculated using
-            % the total volume of the cells and the void volume previously
-            % calculated.
-            %
-            % Departing from the base sphere element, the points located
-            % inside the analyzed cell will be identified. Then the point
-            % where each grain cross the edges of each cell is identified.
-            % With all these points, the boundary function is called to
-            % calculate the volume of the region delimited by them.
-            fprintf('Begin Cluster VR \n')
-            %check total volume calculation
-            gC = goodCell(sc);
-            if isempty(sc.Loops(1).Volume)
-                vl = perCellVolume(sc,gr,gC);
-            end
-            %Get a base sphere
-            bs=baseSphere(2);
-            for l=1:500%numel(sc.Loops)
-                %for each cluster
-                lp=sc.Loops(l); vv=zeros(lp.nbCells,1);
-                %for all cells of the cluster
-                for c=1:lp.nbCells
-                    bsG=bs.*ones(1,1,4);
-                    %cell Ids
-                    grID=sc.DelaunayT(lp.sCells(c),:);
-                    %transform the spheres into grains
-                    bsG=pagemtimes(bsG,permute(gr.Radius(grID),[3,2,1]))+...
-                        permute(gr.Coord(grID,:),[3,2,1]);
-                    bsG=reshape(permute(bsG,[1,3,2]),[],3,1);
-                    %identify grains inside
-                    ID = pointLocation(sc.DelaunayT,bsG);
-                    lCl=(ID==lp.sCells(c));
-                    %Need to add the point where the edges cross the grain
-                    %boundary for more precision Vertices contain all
-                    %exterior faces. Mix them to get get all exterior edges
-                    ed=nchoosek(grID,2); %combine 2per 2 grains
-                    edVec=gr.Coord(ed(:,2),:)-gr.Coord(ed(:,1),:);
-                    edVec=edVec./vecnorm(edVec,2,2);
-                    bsG2=[gr.Coord(ed(:,1),:)+edVec.*gr.Radius(ed(:,1),:);...
-                        gr.Coord(ed(:,2),:)-edVec.*gr.Radius(ed(:,2),:)];
-                    P=[bsG(lCl,:);bsG2];
-                    %Calculate the volume between these points
-                    figure
-                    [k,vv(c)] = boundary([bsG(lCl,:);bsG2],.75);
-                    trisurf(k,P(:,1),P(:,2),P(:,3),'Facecolor','blue','FaceAlpha',0.2)
-                    hold on
-                    trisurf(nchoosek(1:4,3),gr.Coord(grID,1),gr.Coord(grID,2),...
-                        gr.Coord(grID,3),'Facecolor','red','FaceAlpha',0.1)
-                    scatter3(P(:,1),P(:,2),P(:,3))
-                end
-                vv=sum(vv);
-                %if total volume is empty calculate it
-                if isempty(sc.Loops(l).Volume)
-                    sc.Loops(l).Volume=...
-                        sum(vl(ismember(gC,sc.Loops(l).sCells)));
-                end
-                %calculate VR and save it
-                sc.Loops(l).VoidRatio=vv/(sc.Loops(l).Volume-vv);
-            end
-            
-            fprintf('Cluster VR finished\n')
-        end
-        function sc = clusterVRpoints(sc,gr)
-            %CLUSTERVOIDRATIO calculate each cluster Void Ratio
-            % This function go through all clusters inside the simulation
-            % and determinate the volume of the grains inside each cell.
-            % Then for each loop the Void Ratio will be calculated using
-            % the total volume of the cells and the solid volume previously
-            % calculated.
-            %
-            % Departing from the base sphere element, the points located
-            % inside the analyzed cluster will be identified. As points
-            % created by basesphere are well distributed in the sphere
-            % surface, each point will represent a share of the volume of
-            % the grain. Thus the solid volume is calculated by accounting
-            % the number of points inside.
-            fprintf('Begin Cluster VR \n')
-            %check total volume calculation
-            gC = goodCell(sc);
-            if isempty(sc.Loops(1).Volume)
-                vl = perCellVolume(sc,gr,gC);
-            end
-            %Get a base sphere
-            bs=baseSphere('large');
-            for l=1:500%numel(sc.Loops)
-                %Turn base sphere vector into a 3D matrix, per grain
-                bsG=bs.*ones(1,1,sc.Loops(l).Size);
-                %transforfm each page of the 3D matrix in a sphere
-                %represent each grain of the cluster
-                bsG=pagemtimes(bsG,permute(gr.Radius(sc.Loops(l).Grains),[3,2,1]))+...
-                    permute(gr.Coord(sc.Loops(l).Grains,:),[3,2,1]);
-                bsG=reshape(permute(bsG,[1,3,2]),[],3,1);
-                %Get the IDs of the cells that contain these grains and
-                %belong to the cluster l
-                ID = pointLocation(sc.DelaunayT,bsG);
-                lCl=ismember(ID,sc.Loops(l).sCells);
-                %calculate the volume represented by each grain and
-                %transform in a vector matching the size of lCl;
-                vGr=4/3*pi()*gr.Radius(sc.Loops(l).Grains).^3/size(bs,1);
-                vGr=repelem(vGr,size(bs,1));
-                %Calcualte the solid volume
-                vs=sum(vGr(lCl));
-                %if total volume is empty calculate it
-                if isempty(sc.Loops(l).Volume)
-                    sc.Loops(l).Volume=sum(vl(ismember(gC,sc.Loops(l).sCells)));
-                end
-                %calculate VR and save it
-                sc.Loops(l).VoidRatio=(sc.Loops(l).Volume-vs)/vs;
-                
-            end
-            fprintf('Cluster VR finished\n')            
-        end
-function sc = clusterVoidRatio(sc,gr)
-%LOOPSVOIDRATIO calculate each loop Void Ratio
-% This function go through all grains inside the simulation and
-% determinate the volume of the grain inside each cell. Then
-% for each loop the Void Ratio will be calculated using the
-% total volume of the cell and the partial volume of the grains
-% inside it.
-fprintf('Begin Cluster VR \n')
-%check total volume calculation
-gC = goodCell(sc);
-if isempty(sc.Loops(1).Volume)
-    vl = perCellVolume(sc,gr,gC);
-end
-%Get a base sphere
-bs=baseSphere();
-for l=1:numel(sc.Loops)
-    %Turn base sphere vector into a 3D matrix, per grain
-    bsG=bs.*ones(1,1,sc.Loops(l).Size);
-    %transforfm each page of the 3D matrix in a sphere
-    %represent each grain of the cluster
-    bsG=pagemtimes(bsG,permute(gr.Radius(sc.Loops(l).Grains),[3,2,1]))+...
-        permute(gr.Coord(sc.Loops(l).Grains,:),[3,2,1]);
-    bsG=reshape(permute(bsG,[1,3,2]),[],3,1);
-    %Get the IDs of the cells that contain these grains and
-    %belong to the cluster l
-    ID = pointLocation(sc.DelaunayT,bsG);
-    lCl=ismember(ID,sc.Loops(l).sCells);
-    %Need to add the point where the edges cross the grain boundary for more
-    %precision Vertices contain all exterior faces. Mix them to get get all
-    %exterior edges
-    ed=sc.Loops(l).Vertices;
-    ed=unique(sort([ed(:,1) ed(:,2);ed(:,1) ed(:,3);ed(:,2) ed(:,3)],2),'rows');
-    edVec=gr.Coord(ed(:,2),:)-gr.Coord(ed(:,1),:);
-    edVec=edVec./vecnorm(edVec,2,2);
-    bsG2=[gr.Coord(ed(:,1),:)+edVec.*gr.Radius(ed(:,1),:);...
-        gr.Coord(ed(:,2),:)-edVec.*gr.Radius(ed(:,2),:)];
-    
-    %Calculate the volume of these points
-    [~,vv] = boundary([bsG(lCl,:);bsG2]);
-    %if total volume is empty calculate it
-    if isempty(sc.Loops(l).Volume)
-        sc.Loops(l).Volume=sum(vl(ismember(gC,sc.Loops(l).sCells)));
-    end
-    %calculate VR and save it
-    sc.Loops(l).VoidRatio=vv/(sc.Loops(l).Volume-vv);
-end
-
-fprintf('Cluster VR finished\n')
-end
-%}
-%{
-function sc=findClusterSurfBased(sc) %#ok<*DEFNU>
-%FINDCLUSTER This funciton will calculate all the loops formed
-%   This function will use the properties of the space cell
-%   system to find the loops formed by the grains. The
-%   loops can be defined as a void that is surrounded by
-%   grains. On the space cell system two types of contact are
-%   defined, closed and open. To find the loops, all cells
-%   that have a shared open edge will be joined.
-fprintf('Calculating open surfaces at %d\n',sc.Step)
-tic
-%Good cell vector : find the ID of the tetrahedrons that do not
-%contain 'fakepoints'
-gC=sum((sc.DelaunayT(:,:))>sc.NbG,2);
-gC=find(gC==0);     %get no 'fakegrains' lines IDs.
-sc.GoodCells=gC;
-
-%Get all contacts belonging to each of the good cells and check
-%how many of them are Closed or Open
-spCell=sort(sc.DelaunayT(gC,:),2);
-%Get all surfaces
-surf=[[spCell(:,1),spCell(:,2),spCell(:,3)];...
-    [spCell(:,1),spCell(:,2),spCell(:,4)];...
-    [spCell(:,2),spCell(:,3),spCell(:,4)]];
-surf=unique(surf,'rows');
-%transform surfaces into edges
-edges=cat(3,[surf(:,1),surf(:,2)],...
-    [surf(:,1),surf(:,3)],...
-    [surf(:,2),surf(:,3)]);
-chkV=ones(size(surf,1),6);
-for i=1:3
-    chkV(:,i)=ismember(edges(:,:,i),sc.OpenEdges,'rows');
-end
-
-%get the ID of the open surfaces
-vSId=find(sum(chkV,2)==3);     %id of the gC vector
-
-%Create a "struc" containing each of the open edges
-%information. The edges, vertices and the ID of the cells they
-%connect.
-vSurf.Edges='';
-vSurf.Vertices='';
-vSurf.ConID='';
-vl=1;
-for i=1:size(vSId,1)
-    vert=surf(vSId(i),:);
-    edg=permute(edges(vSId(i),:,:),[3,2,1]);
-    atC=edgeAttachments(sc.DelaunayT,edg);%get the cell
-    conId=intersect(intersect(atC{1},atC{2}),atC{3});
-    if size(intersect(conId,gC),1)>1
-        vSurf(vl).Vertices=vert;
-        vSurf(vl).Edges=edg;
-        vSurf(vl).ConID=conId;
-        vl=vl+1;
-    end
-end
-fprintf('Joining Loops\n')
-%Create variables
-lArray=singleLoop.empty(1,0);
-usd=zeros(sc.NbC,1);u=1;	%contain sigleCells that were already used
-for i=1:size(gC,1)          %for each goodCells
-    %check if cell was already joined to other Loop
-    cID=gC(i);
-    if sum(usd==cID)==1 ;continue;end
-    loopi=cID;
-    %check if cell belong to any of the vSurf.ConID
-    vS=ismember(cat(1,vSurf.ConID),cID);
-    vS=find(sum(vS,2)>0);                   %get line where cID appears on ConID
-    nbvS=numel(vS);                         %get nb of VirtS
-    %if any of the surfaces are open, all the spaceCells that
-    %share the same open surface belongs to the same loop,
-    %else the cell form a loop by itself.
-    if nbvS>0
-        nbvS2=0; %nb of egdges2
-        %To be sure we added all the the cells into one big
-        %cell, the number of unique virutal surfaces between two
-        %interations must stay constant.
-        vSCon=[vSurf(vS).ConID];
-        while nbvS2~=nbvS
-            nbvS2=nbvS;
-            %get the cells that share the open surfaces,
-            %there are always two cells sharing a surface
-            loopi=unique([loopi,vSCon]);
-            loopi=loopi(ismember(loopi,gC));
-            %make sure all vertices are loopi on a line : 1xN vectors
-            if size(loopi,1)>size(loopi,2);loopi=loopi';end
-            %check if there are more open surfaces
-            vS=ismember(cat(1,vSurf.ConID),loopi);
-            vS=find(sum(vS,2)>0);
-            vSCon=[vSurf(vS).ConID];
-            nbvS=numel(vS);
-        end
-    end
-    %Save found loop into the cell array by creating a
-    %singleLoop object. Also save the  size of the loop into a
-    %separete array.
-    loopsz=(sc.D+1)*numel(loopi)-2*nbvS;
-    lps=singleLoop(sc.DelaunayT(loopi,:),loopi,loopsz,sc.D);
-    lArray(end+1)=lps;
-    %Save spaceCells that were used into the 'usd' array, so
-    %loop is not repeated
-    s=sum(loopi>0);
-    usd(u:(u-1+s))=loopi(1:s);
-    u=u+s;
-end
-fprintf('Loops finished\n')
-toc
-sc.Loops=lArray;
-end
-%}

@@ -7,10 +7,7 @@ function exe_GetHSG(app)
 %   Peters,Muthswamy,Wibowo,Tordesillas 2005
 
 %Load values
-N1=app.N1EF.Value;
-N2=app.N2EF.Value;
-interval=app.CalcInt.Value;
-nbFiles=ceil((N2-N1)/interval+1);
+[N1,N2,interval,~,nbFiles] = createStepArray(app);
 
 %Turn on calculation pannel
 app=CalcPanel(app,'',nbFiles,'Starting calculation','on');
@@ -42,6 +39,7 @@ for i=1:nbFiles
     hsgID=hsgID+(pStress(:,1)>=mean(pStress(:,1)));
 end
 CalcPanel(app,i+1,nbFiles,'','off');
+set(0,'defaultAxesFontSize',app.FontSizeEF.Value)
 
 %Prepare Strain data
 f=figure;ax=axes(f);hold(ax,'on');

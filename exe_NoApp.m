@@ -24,13 +24,13 @@ Anisotropy=0;
 BasicInfo=0;
 ExtForces=1;
 IntForces=0;
-VoidRatio=1;
+VoidRatio=0;%1;
 EdgeRatio=0;
 
 %Calculations with multiple options
-ForceChain={'BASE','CL'};
+ForceChain=0;%{'CL'};
     %ForceChain accepts 0 (no calculation) or a cell array. Array values
-    %must be chosen from the following (not necessaraly on order) :
+    %must be chosen from the following (not necessaraly in order) :
     %'BASE' for the base fc study,
     %'CL' for cluster and force chain,
     %'BNDANGLE' for fc bending limit angle,
@@ -41,20 +41,26 @@ ForceChain={'BASE','CL'};
     %[Angle, multFactor].If no values determined default [45,1] will
     %be used.
     % EX: {'BASE','GRN',[1,383,1547],'CLTF','CL','CNST',[30,1.1]}
-StrainTensor=3;
-    %1 for Global, 2 PerCell, 3 Both.  W2Cluster can be done adding a 4 ,
-    %however PerCell need to be executed in the same run as [2,4] or [3,4].
-Loops={'VTK','ANI','DEF','VR'};         
+StrainTensor=0;%{'GLOBAL','PERCELL','STNCL'};
+    %StrainTensor accepts 0 (no calculation) or a cell array. Array values
+    %must be chosen from the following (not necessaraly in order) :
+    %'GLOBAL' for calculation for the entire specimen;
+    %'PERCELL' for per cell and per grain calculations;
+    %'VTKOFF' for removing vtk ploting
+    %'STNCL' for strain cluster
+    % EX : {'GLOBAL','PERCELL','VTKOFF','STNCL'}
+Loops=0;%{'VR'};%{'VTK','VR','GAC'};         
     %Loops accepts 0 (no calculation) or a cell array. Array values
     %must be chosen from the following (not necessaraly on order) :
     %'VTK' for vtk file save,
-    %'DEF' for cluster deformability,
-    %'TRF' for cluster transformation,
-    %'ANI' for cluster anisotropy,
-    %'STN' for cluster strain,
-    %'STS' for cluster stress.
-    %'VR'  for cluster Voidratio.
-    % EX: {'VTK','DEF','TRF','ANI','STN','STS','VR'}
+    %'DEF' for cluster deformability;
+    %'TRF' for cluster transformation;
+    %'ANI' for cluster anisotropy;
+    %'STN' for cluster strain;
+    %'STS' for cluster stress;
+    %'VR'  for cluster Voidratio;
+    %'GAC'  for grain average cluster category;
+    % EX: {'VTK','DEF','TRF','ANI','STN','STS','VR', 'CA'}
 
 %Partial Calculation
 %   Value of 1 means it will be executed 
@@ -107,6 +113,8 @@ app.SimType='';
 app.TitlesCB.Value=tit;
 app.LegendsCB.Value=leg;
 app.TimeTracker='';
+app.PlotWidthEF.Value=1.5;
+app.FontSizeEF.Value=11;
 if mrk;of='On';else;of='Off';end
 app.MarkSwitch.Value=of;
 if pts;of='On';else;of='Off';end
@@ -227,6 +235,7 @@ if isa(Loops,'cell') %{"VTK","DEF","TRF","ANI","STN","STS","VR"}
     app.LPStrSwitch.Value='Off';
     app.LPVRSwitch.Value='Off';
     app.LPStnSwitch.Value='Off';
+    app.LPACSwitch.Value='Off';
     vtk='Off';
     opt='';
     if sum(strcmpi(Loops,'VTK'));vtk='On';opt=' Vtk';end
@@ -236,6 +245,7 @@ if isa(Loops,'cell') %{"VTK","DEF","TRF","ANI","STN","STS","VR"}
     if sum(strcmpi(Loops,'STN'));app.LPStnSwitch.Value='On';opt=[opt ' Stn'];end
     if sum(strcmpi(Loops,'STS'));app.LPStrSwitch.Value='On';opt=[opt ' Str'];end
     if sum(strcmpi(Loops,'VR' ));app.LPVRSwitch.Value='On';opt=[opt ' VR'];end
+    if sum(strcmpi(Loops,'GAC' ));app.LPACSwitch.Value='On';opt=[opt ' CA'];end
     app.LPPctEF.Value=99;
     fprintf('Executing Loops\n');
     if ~isempty(opt)
@@ -251,23 +261,32 @@ if IntForces
 end
 
 %Strain Tensor - second strain as other calc may depend on this results
-if StrainTensor~=0
+
+%'GLOBAL' for calculation for the entire specimen;
+    %'PERCELL' for per cell and per grain calculations;
+    %'VTK' for vtk plotting
+    %'STNCL' for strain cluster
+
+if isa(StrainTensor,'cell')
     type='';
-    if ismember(1,StrainTensor)
+    app.StnClusterCB.Value=0; %strain cluster is turned on if asked
+    app.StnVTKCB.Value=1; %VTK is turned off if asked
+    if sum(strcmpi(StrainTensor,'GLOBAL'))
         type='GLOBAL';
-    elseif ismember(2,StrainTensor)
-        type='PERCELL';
-    elseif ismember(3,StrainTensor)
-        type='BOTH';
     end
-    if ismember(StrainTensor,4)
-        app.StTW2ClCB.Value=1;
-    else
-        app.StTW2ClCB.Value=0;
+    if sum(strcmpi(StrainTensor,'PERCELL'))
+        if isempty(type)
+            type='PERCELL';
+        else
+            type='BOTH';
+        end
     end
+    
     if ~isempty(type)
+        if sum(strcmpi(StrainTensor,'VTKOFF')); app.StnVTKCB.Value=0; end
+        if sum(strcmpi(StrainTensor,'STNCL')); app.StnClusterCB.Value=1; end
         fprintf('Executing Strain\n');
-        fprintf(['Options : ' type '\n']);
+        fprintf(['Type : ' type '\n']);
         exe_StrainTensor(app,type,PD);
     end
 end
