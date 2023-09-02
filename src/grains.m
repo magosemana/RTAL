@@ -154,14 +154,19 @@ classdef grains
             F=rData(:,6-D:5);        %all forces
             normF=vecnorm(F,2,2);   %force magnitude
             f=F./normF;             %unitary force vector
+
             %BRANCH VECTOR normal
             l=(gr.Coord(rData(:,2),4-D:3)-gr.Coord(rData(:,1),4-D:3)); %all branch
             l=l./vecnorm(l,2,2); %unitary branch vector
             
             %ANG between F and l
             cosang=sum(f.*l,2); %cosinus of ang between F and l (dot product)
+                %option 1 calculate anisotropy from force values
             fn=normF.*cosang.*l;%force projected into the branch vector
             ft=F-fn;	%rest of the force
+                %option 2 calculate anisotropy from force normals
+            %fn=cosang.*l;%force projected into the branch vector
+            %ft=f-fn;	%rest of the force
             
             %HOR and VER forces
             if app.Bool3D %atan(Fz/sqrt(Fx^2+Fy^2))
@@ -175,9 +180,10 @@ classdef grains
             pcFT(:,:,:,1)=pagemtimes(permute(l,[2,1,3]),l);
             nF=permute(f,[3,2,1]);
             pcFT(:,:,:,2)=pagemtimes(permute(nF,[2,1,3]),nF);
-            %pcFT(:,:,:,2)=pagemtimes(permute(F,[2,3,1]),nF);
-            pcFT(:,:,:,3)=pagemtimes(permute(fn,[2,3,1]),l);
-            pcFT(:,:,:,4)=pagemtimes(permute(ft,[2,3,1]),l);
+            fn=permute(fn,[3,2,1]);
+            pcFT(:,:,:,3)=pagemtimes(permute(fn,[2,1,3]),fn);
+            ft=permute(ft,[3,2,1]);
+            pcFT(:,:,:,4)=pagemtimes(permute(ft,[2,1,3]),ft);
             
             if ~app.SubdivisionButton.Value
                 cDir=[nbCtcs, sum(angleB) sum(~angleB)];
@@ -204,6 +210,7 @@ classdef grains
             gr.ContactsDir=cDir;
             if ~app.SubdivisionButton.Value
                 FT=FT/cDir(1);
+                FT(:,:,1)=FT(:,:,1)/norm(FT(:,:,1));
                 FT(:,:,2)=FT(:,:,2)/norm(FT(:,:,2));
                 FT(:,:,3)=FT(:,:,3)/norm(FT(:,:,3));
                 FT(:,:,4)=FT(:,:,4)/norm(FT(:,:,4));
