@@ -99,6 +99,8 @@ pts=0;
 %to simulate the app and make all funciton work properly. Modifications in
 %this part may break this function
 
+%add functions to path
+addpath('src');
 
 %Start the 'app' object that will substitute the application and contain
 %the values.
