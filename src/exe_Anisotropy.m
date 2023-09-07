@@ -49,13 +49,13 @@ for i=1:nbFiles
     if app.SubdivisionButton.Value==0 
         Results(i,1)=step;
         FT=gr.FabricTensor; %geometric, force
-        e = [eig(FT(:,:,1)),eig(FT(:,:,2)),eig(FT(:,:,3)),eig(FT(:,:,4))];
+        e = [eig(FT(:,:,1)), eig(FT(:,:,2)), eig(FT(:,:,3)), eig(FT(:,:,4))];
         e=sort(e,1);
         %coord number
         Results(i,2)=mean(gr.ContactNubr);
         %fabric anisotropy
         if app.Bool3D
-            Results(i,3:6)=sqrt(((e(1,:)-e(2,:)).^2+...
+            Results(i,3:6)=2*sqrt(((e(1,:)-e(2,:)).^2+...
                 (e(2,:)-e(3,:)).^2+(e(3,:)-e(1,:)).^2)/2)';
         else
             Results(i,3:6)=(e(2,:)-e(1,:))';
@@ -72,16 +72,16 @@ for i=1:nbFiles
             Results(i,2,j)=mean(subCtcts); % Z
             %fabric anisotropy
             if app.Bool3D
-                Results(i,3:4,j)=sqrt((FTsub(:,1,1)-FTsub(:,2,2)).^2+...  %(sig1-sig2)^2
+                Results(i,3:4,j)=sqrt(((FTsub(:,1,1)-FTsub(:,2,2)).^2+...  %(sig1-sig2)^2
                     (FTsub(:,2,2)-FTsub(:,3,3)).^2+...  %(sig2-sig3)^2
                     (FTsub(:,3,3)-FTsub(:,1,1)).^2+...  %(sig3-sig1)^2
-                    6*FTsub(:,1,2).^2 +...              % 2*(sig12)^2
-                    6*FTsub(:,1,3).^2 +...              % 2*(sig13)^2
-                    6*FTsub(:,2,3).^2 )';               % 2*(sig23)^2
+                    6*FTsub(:,1,2).^2 +...              % 6*(sig12)^2
+                    6*FTsub(:,1,3).^2 +...              % 6*(sig13)^2
+                    6*FTsub(:,2,3).^2 )/2 )';           % 6*(sig23)^2
             else
                 Results(i,3:4,j)=sqrt((...
-                    (FTsub(:,1,1)-FTsub(:,2,2)).^2+...  %(sig1-sig2)^2
-                    6*FTsub(:,1,2).*FTsub(:,1,2) ))';	% 2*(sig12)^2';
+                    ((FTsub(:,1,1)-FTsub(:,2,2)).^2)/2+...  %(sig1-sig2)^2
+                    FTsub(:,1,2).*FTsub(:,1,2) ))';	% 2*(sig12)^2';
             end
             %Contact nb and directions
             Results(i,5:7,j)=sum(gr.ContactsDir(PD.SubGrains{j},:),1);
@@ -95,14 +95,17 @@ CalcPanel(app,i+1,nbFiles,'','off');
 %as strain
 infP=[0,0,0,0];
 %take mean pressure if Qcst else strain
+stress = extStress(app.TrialData,Results(:,1,1),app);
 if app.SimType==3
-    stress = extStress(app.TrialData,Results(:,1,1),app);
     xAxis=stress(:,end);
 else
     strain = extStrains(app.TrialData,Results(:,1,1),N1,app);
     xAxis=strain(:,end); 
 end 
 consoStrain = extStrains(app.TrialData,app.ConsoStep,N1,app);
+
+%relative stress q/p
+qop=stress(:,end-1)./stress(:,end);
 
 %Transform Timesteps into Time
 Results(:,1,:)=Results(:,1,:)*app.TimeStep;
@@ -123,10 +126,10 @@ if app.SubdivisionButton.Value==0
     fprintf(fid, '-1|-1|-1\n');
     fprintf(fid,['From step %d to %d with interval %d - '...
         char(prefix) '\n'],N1,N2,interval);
-    fprintf(fid, ['Step | Coordination | AnisotropyG | AnisotropyM |'...
+    fprintf(fid, ['StrainZ | Rel Stress | Coordination | AnisotropyG | AnisotropyM |'...
        'AnisotropyFn | AnisotropyFt | NbContacts | NbcHorizontal | '...
-       'NbcVertical | StrainZ\n']);
-    Results=[Results xAxis];
+       'NbcVertical \n']);
+    Results=[xAxis qop Results(:,2:end)];
     fprintf(fid,'%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n',Results');
     %Create plotData object
     pD = plotData("Normal",Results,app,prefix,consoStrain(end));
@@ -214,20 +217,21 @@ if numel(pD)<8
 else
     C = graphClrCode(size(pD,2));%plot colorcode
 end
+
 switch upper(mode)
     case 'MULTI'   
         for i=1:size(pD,2)
             fl=pD(i).Results;j=1;
             %coordination
-            plotMark(app,ax(j),fl(:,end),fl(:,2),'Color',C(i,:));j=j+1;
+            plotMark(app,ax(j),fl(:,1),fl(:,3),'Color',C(i,:));j=j+1;
             %Anisotropy
-            plotMark(app,ax(j),fl(:,end),fl(:,3),'Color',C(i,:));j=j+1;%geo
-            plotMark(app,ax(j),fl(:,end),fl(:,4),'Color',C(i,:));j=j+1;%mec
-            plotMark(app,ax(j),fl(:,end),fl(:,5),'Color',C(i,:));j=j+1;%normal F
-            plotMark(app,ax(j),fl(:,end),fl(:,6),'Color',C(i,:));j=j+1;%tang F
-            plotMark(app,ax(j),fl(:,end),fl(:,7),'Color',C(i,:));j=j+1;%tot ct
-            plotMark(app,ax(j),fl(:,end),fl(:,8),'Color',C(i,:));j=j+1;%ver ct
-            plotMark(app,ax(j),fl(:,end),fl(:,9),'Color',C(i,:))       %hor ct
+            plotMark(app,ax(j),fl(:,1),fl(:,4),'Color',C(i,:));j=j+1;%geo
+            plotMark(app,ax(j),fl(:,1),fl(:,5),'Color',C(i,:));j=j+1;%mec
+            plotMark(app,ax(j),fl(:,1),fl(:,6),'Color',C(i,:));j=j+1;%normal F
+            plotMark(app,ax(j),fl(:,1),fl(:,7),'Color',C(i,:));j=j+1;%tang F
+            plotMark(app,ax(j),fl(:,1),fl(:,8),'Color',C(i,:));j=j+1;%tot ct
+            plotMark(app,ax(j),fl(:,1),fl(:,9),'Color',C(i,:));j=j+1;%ver ct
+            plotMark(app,ax(j),fl(:,1),fl(:,10),'Color',C(i,:))       %hor ct
         end
         if leg
             for j=1:nb
@@ -300,44 +304,36 @@ switch upper(mode)
         saveas(f(j),fullfile(path,fnm+png));
         
     otherwise
-%         if pD.ConsoTime>pD.N1*pD.TimeStep && pD.ConsoTime<pD.N2*pD.TimeStep
-%             tf=1;
-%         else
-%             tf=0;
-%         end
+
         j=1;
-        %Z=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,2));
+        %Coordination number =f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,3));
         j=j+1;
-        %TotCtcts=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,7));
+        %Total Contacts =f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,8));
         j=j+1;
-        %Ver & Hor Ctcts=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,8)./pD.Results(:,7))
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,9)./pD.Results(:,7));
+        %Pct of Horizontal and Vertical Ctcts=f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,9)./pD.Results(:,8))
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,10)./pD.Results(:,8));
         j=j+1;
-        %A=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,3))
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,4));
+        %Meca and geometric anisotropy =f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,4)); %geo
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,5)); %mec
         j=j+1;
-        %An & At=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,5))
-        plotMark(app,ax(j),pD.Results(:,end),pD.Results(:,6));
+        %Normal and tangential force anisotropy =f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,6))
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,7));
         j=j+1;
-        %An & At=f(Ez)
-        plotMark(app,ax(j),pD.Results(:,end),sum(pD.Results(:,[3,5,6]),2))
-        
-%         if tf
-%             for j=1:nb
-%                 xline(ax(1),pD.ConsoStrain,'Color','k')
-%             end
-%         end
-        
+        %Anisotropy and rel stress comparison=f(Ez)
+        plotMark(app,ax(j),pD.Results(:,1),sum(pD.Results(:,[4,6,7]),2)/2)
+        plotMark(app,ax(j),pD.Results(:,1),pD.Results(:,2))
+
         if leg
             j=3;
             legend(ax(j),'Vertical','Horizontal','location','best');j=j+1;
             legend(ax(j),'Geometric','Mechanical','location','best');j=j+1;
-            legend(ax(j),'Normal','Tangencial','location','best');
+            legend(ax(j),'Normal','Tangencial','location','best');j=j+1;
+            legend(ax(j),"0.5(Ag+An+At)","Rel Stress q/p",'Location','best');
         end
         %create suffix for filenames
         suffix=pD.N1+"to"+pD.N2+"int"+pD.Interval;
@@ -380,8 +376,8 @@ switch upper(mode)
         saveas(f(j),fullfile(path,fnm+png));
         j=j+1;
         %0.5(Ag+An+At)=f(Ez)
-        if tit;title(ax(j),'Evolution of 0.5(Ag+An+At)');end
-        ylabel(ax(j),'Anisotropy')
+        if tit;title(ax(j),'Anisotropy vs Relative stress');end
+        ylabel(ax(j),'Value')
         xlabel(ax(j),xlab)
         fnm=pD.Prefix(1)+"SumAnisotropy"+suffix;
         saveas(f(j),fullfile(path,fnm+png));

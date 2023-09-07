@@ -165,13 +165,13 @@ classdef grains
             fn=normF.*cosang.*l;%force projected into the branch vector
             ft=F-fn;	%rest of the force
                 %option 2 calculate anisotropy from force normals
-            %fn=cosang.*l;%force projected into the branch vector
-            %ft=f-fn;	%rest of the force
+            % fn=fn./vecnorm(fn,2,2); %unitary branch vector
+            % ft=ft./vecnorm(ft,2,2); %unitary branch vector
             
-            %HOR and VER forces
-            if app.Bool3D %atan(Fz/sqrt(Fx^2+Fy^2))
+            %HOR and VER contacts
+            if app.Bool3D %atan(Lz/sqrt(Lx^2+Ly^2))
                 angleB=abs(atan(l(:,3)./sqrt(l(:,1).^2+l(:,2).^2)))>=(pi()/4);
-            else %atan(Fz/Fy)
+            else %atan(Lz/Ly)
                 angleB=abs(atan(l(:,2)./l(:,1)))>=(pi()/4);
             end
             
@@ -210,10 +210,8 @@ classdef grains
             gr.ContactsDir=cDir;
             if ~app.SubdivisionButton.Value
                 FT=FT/cDir(1);
-                FT(:,:,1)=FT(:,:,1)/norm(FT(:,:,1));
-                FT(:,:,2)=FT(:,:,2)/norm(FT(:,:,2));
-                FT(:,:,3)=FT(:,:,3)/norm(FT(:,:,3));
-                FT(:,:,4)=FT(:,:,4)/norm(FT(:,:,4));
+                FT(:,:,3)=FT(:,:,3)/trace(FT(:,:,3));
+                FT(:,:,4)=FT(:,:,4)/trace(FT(:,:,4));
                 gr.FabricTensor=FT;
             else
                 gr.PGFabricTensor=pgFT;
